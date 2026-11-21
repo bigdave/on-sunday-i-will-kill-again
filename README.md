@@ -28,7 +28,7 @@ For another Rust project, use this Git dependency (the crate is not published to
 
 ```toml
 [dependencies]
-on-sunday-i-will-kill-again = { git = "https://github.com/bigdave/on-sunday-i-will-kill-again", tag = "v0.1.1" }
+on-sunday-i-will-kill-again = { git = "https://github.com/bigdave/on-sunday-i-will-kill-again", tag = "v0.2.0" }
 ```
 
 For a local checkout, use a path dependency instead (adjust the path):
@@ -63,14 +63,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Optional human limitations
 
-Available on `codex/human-limitations-v1` (not the existing v0.1.1 release tag). To use this profile before a tagged release:
+Available starting in **v0.2.0**. Use the release tag:
 
 ```toml
 [dependencies]
-on-sunday-i-will-kill-again = { git = "https://github.com/bigdave/on-sunday-i-will-kill-again", branch = "codex/human-limitations-v1" }
+on-sunday-i-will-kill-again = { git = "https://github.com/bigdave/on-sunday-i-will-kill-again", tag = "v0.2.0" }
 ```
 
-For a competition, replace `branch` with `rev` set to the agreed commit SHA so every team uses exactly the same implementation. Enable the profile explicitly:
+All teams should use the same release tag (or an agreed immutable commit `rev`). Upgrading from 0.1.x: explicit `Config` struct literals must add `capabilities: None` or use `..Default::default()`. Existing constructor-based clients retain unrestricted behavior by default. Enable the profile explicitly:
 
 ```rust
 use on_sunday_i_will_kill_again::{Config, PlayerCapabilities};

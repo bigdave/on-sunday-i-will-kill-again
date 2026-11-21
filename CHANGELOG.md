@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-11-21
 
 Add opt-in `Config.capabilities = Some(PlayerCapabilities::human_limitations_v1())`: fixed observation delay, FOV/event filtering, and worker-timed angular speed/acceleration limits. Default `None` preserves unrestricted behavior. No new dependencies or map assets required. Config struct literals must include the new field or use `..Default::default()`.
 
