@@ -143,9 +143,9 @@ fn delta(out: &mut Vec<u8>, a: &UserCmd, b: &UserCmd) {
         bits |= 64;
     }
     out.push(bits);
-    for i in 0..3 {
+    for (i, angle) in b.angles.iter().enumerate() {
         if bits & (1 << i) != 0 {
-            out.extend(b.angles[i].to_le_bytes());
+            out.extend(angle.to_le_bytes());
         }
     }
     for (bit, value) in [(8, b.forward), (16, b.side), (32, b.up)] {
@@ -353,13 +353,13 @@ pub fn player(r: &mut Reader, p: &mut PlayerState) -> Result<()> {
         p.pm_type = r.u8()?;
     }
     if b & 2 != 0 {
-        for i in 0..3 {
-            p.origin[i] = r.i16()? as f32 / 8.;
+        for value in &mut p.origin {
+            *value = r.i16()? as f32 / 8.;
         }
     }
     if b & 4 != 0 {
-        for i in 0..3 {
-            p.velocity[i] = r.i16()? as f32 / 8.;
+        for value in &mut p.velocity {
+            *value = r.i16()? as f32 / 8.;
         }
     }
     if b & 8 != 0 {
@@ -372,18 +372,18 @@ pub fn player(r: &mut Reader, p: &mut PlayerState) -> Result<()> {
         p.gravity = r.i16()?;
     }
     if b & 64 != 0 {
-        for i in 0..3 {
-            p.delta_angles[i] = r.i16()?;
+        for value in &mut p.delta_angles {
+            *value = r.i16()?;
         }
     }
     if b & 128 != 0 {
-        for i in 0..3 {
-            p.view_offset[i] = r.u8()? as i8 as f32 * 0.25;
+        for value in &mut p.view_offset {
+            *value = r.u8()? as i8 as f32 * 0.25;
         }
     }
     if b & 256 != 0 {
-        for i in 0..3 {
-            p.view_angles[i] = r.u16()?;
+        for value in &mut p.view_angles {
+            *value = r.u16()?;
         }
     }
     if b & 512 != 0 {
@@ -406,9 +406,9 @@ pub fn player(r: &mut Reader, p: &mut PlayerState) -> Result<()> {
         r.take(1)?;
     }
     let stats = r.u32()?;
-    for i in 0..32 {
+    for (i, value) in p.stats.iter_mut().enumerate() {
         if stats & (1 << i) != 0 {
-            p.stats[i] = r.i16()?;
+            *value = r.i16()?;
         }
     }
     Ok(())
