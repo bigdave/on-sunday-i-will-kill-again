@@ -1,13 +1,13 @@
 # on-sunday-i-will-kill-again
 
-A standalone Rust library that connects to classic Quake II as an ordinary player. Build a CTF bot by reading observations and submitting player input; the library handles the network connection. It has no external Rust dependencies and needs no game assets on the client.
+A standalone Rust library that connects to classic Quake II as an ordinary player. Build a deathmatch, team deathmatch or CTF bot by reading observations and submitting player input; the library handles the network connection. It has no external Rust dependencies and needs no game assets on the client.
 
 ## Included
 
 - Protocol 34 challenge/connect, reliable commands, delta snapshots and movement checksums.
 - Independent background networking at 20 input updates per second.
 - Player/entity state, player names and teams, inventory, model/sound/item names and classic CTF HUD values.
-- Movement, aiming, attack/respawn input, weapon selection and team selection.
+- Movement, aiming, attack/respawn input, weapon selection, CTF team joining and classic skin/model team identification.
 - Bounded event history, expiring input, stale-observation rejection, map changes and server-requested reconnects.
 
 Navigation, map geometry, line-of-sight calculations, target selection, combat policy, learning and team coordination belong in your bot. There is no built-in AI, renderer, JSON service or deployment integration.
@@ -55,7 +55,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Compatibility and observations
 
-Validated locally with Q2PRO serving protocol 34 and classic ThreeWave CTF, including two clients on opposite teams, inventory, movement, firing and a map transition. This is an initial 0.1 API, not a guarantee for every mod or server. Extended protocols and the 2023 rerelease are unsupported. Ordinary protocol-34 deathmatch uses the same transport; its HUD differs from CTF.
+Validated locally with Q2PRO serving protocol 34:
+
+| Mode | Verified behavior |
+| --- | --- |
+| Free-for-all deathmatch | Joining, movement, weapon switching, damage, kill scoring, respawn and map changes. |
+| Classic skin-team deathmatch | Same core controls, skin team identification, enemy frags, friendly-fire protection and teamkill penalties. |
+| Classic model-team deathmatch | Same checks with teams defined by player model. |
+| Classic ThreeWave CTF | Opposite-team joining, inventory, movement, firing and map changes. |
+
+For base-game team deathmatch, leave `Config.team=None` and choose `Config.skin` to join the appropriate skin/model team. `PlayerInfo::deathmatch_team(rule)` gives the classic team key. The caller supplies the server's rule; `DeathmatchTeamRule::from_dmflags()` decodes it. `Config.team` and `Observation::team()` are CTF-specific. See [mode setup](docs/server.md).
+
+These checks use disposable fixture modules for positioning, loadouts and health; ordinary combat, scoring and team rules are unchanged. This is an initial 0.1 API, not a guarantee for every mod or server. Extended protocols and the 2023 rerelease are unsupported.
 
 Snapshots are **network information, not human vision**. Potentially visible set (PVS) updates can contain entities behind walls or behind the player; absence does not prove an entity no longer exists. Collision tests and fair perception rules must be supplied separately. The crate is not a competition sandbox or anti-cheat system.
 
@@ -70,8 +81,8 @@ cargo test
 cargo doc --no-deps
 ```
 
-The live CTF test is opt-in and requires separately installed legal game data and a disposable test server. No maps or commercial assets are distributed here.
+The live mode tests are opt-in and requires separately installed legal game data and a disposable test server. No maps or commercial assets are distributed here.
 
 ## License
 
-GPL-2.0-or-later. Protocol code and checksum data derive from Quake II / Q2PRO; see [NOTICE](NOTICE) and [LICENSE](LICENSE). Preserve those notices and account for GPL obligations when distributing derivative programs. The game assets have separate licensing.
+GPL-2.0-or-later. Protocol code and checksum data derive from Quake II / Q2PRO; see [NOTICE](./NOTICE) and [LICENSE](./LICENSE). Preserve those notices and account for GPL obligations when distributing derivative programs. The game assets have separate licensing.

@@ -26,11 +26,31 @@ impl Team {
         }
     }
 }
+/// Classic base-game team-deathmatch grouping. Supply the server's rule;
+/// protocol 34 does not advertise dmflags in the player snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeathmatchTeamRule {
+    Skin,
+    Model,
+}
+impl DeathmatchTeamRule {
+    /// DF_MODELTEAMS (128) takes precedence over DF_SKINTEAMS (64), as on the server.
+    pub fn from_dmflags(flags: u32) -> Option<Self> {
+        if flags & 128 != 0 {
+            Some(Self::Model)
+        } else if flags & 64 != 0 {
+            Some(Self::Skin)
+        } else {
+            None
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Config {
     pub server: SocketAddr,
     pub name: String,
     pub skin: String,
+    /// Classic CTF only. For base-game team deathmatch set `skin` and leave this None.
     pub team: Option<Team>,
     /// Optional ordinary game-server password. Never exposed in observations.
     pub password: Option<String>,
@@ -151,6 +171,20 @@ pub struct PlayerInfo {
     pub skin: String,
     pub team: Option<Team>,
 }
+impl PlayerInfo {
+    /// Exact classic team key from the configured model/skin rule, not a tactic.
+    /// Empty slots have no team. This does not apply custom mod team semantics.
+    pub fn deathmatch_team(&self, rule: DeathmatchTeamRule) -> Option<&str> {
+        if self.name.is_empty() || self.skin.is_empty() {
+            return None;
+        }
+        Some(match (rule, self.skin.split_once('/')) {
+            (DeathmatchTeamRule::Model, Some((model, _))) => model,
+            (DeathmatchTeamRule::Skin, Some((_, skin))) => skin,
+            (_, None) => self.skin.as_str(),
+        })
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Inventory {
     pub counts: [i16; 256],
@@ -250,6 +284,7 @@ impl Observation {
     pub fn score(&self) -> i16 {
         self.player.stats[14]
     }
+    /// Classic CTF skin-based red/blue identification, not base-game deathmatch teams.
     pub fn team(&self) -> Option<Team> {
         self.slot
             .and_then(|s| self.players.get(s))
@@ -286,6 +321,43 @@ impl Observation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn classic_deathmatch_team_rules_match_server_keys() {
+        let p = PlayerInfo {
+            slot: 0,
+            entity_id: 1,
+            name: "Player".into(),
+            skin: "female/grunt".into(),
+            team: None,
+        };
+        assert_eq!(p.deathmatch_team(DeathmatchTeamRule::Skin), Some("grunt"));
+        assert_eq!(p.deathmatch_team(DeathmatchTeamRule::Model), Some("female"));
+        assert_eq!(DeathmatchTeamRule::from_dmflags(0), None);
+        assert_eq!(
+            DeathmatchTeamRule::from_dmflags(64 | 256),
+            Some(DeathmatchTeamRule::Skin)
+        );
+        assert_eq!(
+            DeathmatchTeamRule::from_dmflags(64 | 128),
+            Some(DeathmatchTeamRule::Model)
+        );
+        assert_eq!(
+            PlayerInfo {
+                name: String::new(),
+                ..p.clone()
+            }
+            .deathmatch_team(DeathmatchTeamRule::Skin),
+            None
+        );
+        assert_eq!(
+            PlayerInfo {
+                skin: "noslash".into(),
+                ..p
+            }
+            .deathmatch_team(DeathmatchTeamRule::Skin),
+            Some("noslash")
+        );
+    }
     #[test]
     fn unsafe_text_and_nonfinite_inputs_are_rejected() {
         for name in ["", "a;quit", "a\\password\\b", "a\nquit", "a\"b"] {

@@ -6,7 +6,7 @@ Copyright (C) 1997-2001 id Software, Inc., and Q2PRO contributors.
 https://github.com/q2pro/q2pro
 Reference revision: 601a8df8433b0c50dbbe37c0716c3793fff140a7
 src/common/net/chan.c, src/common/msg.c, src/common/crc.c,
-src/client/parse.c, inc/common/protocol.h.
+src/client/parse.c, inc/common/protocol.h, src/game/g_cmds.c.
 
 The Rust implementation is distributed under GPL version 2 or, at your option,
 any later version. See LICENSE. Preserve this attribution in redistributions.
