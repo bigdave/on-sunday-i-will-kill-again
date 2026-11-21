@@ -431,3 +431,52 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    fn frame(number: i32, delta: i32, entity: &[u8]) -> Vec<u8> {
+        let mut b = vec![20];
+        b.extend(number.to_le_bytes());
+        b.extend(delta.to_le_bytes());
+        b.extend([0, 0, 17]);
+        b.extend(0u16.to_le_bytes());
+        b.extend(2u32.to_le_bytes());
+        b.extend(100i16.to_le_bytes());
+        b.push(18);
+        b.extend(entity);
+        b.extend([0, 0]);
+        b
+    }
+    #[test]
+    fn entities_inherit_baselines_and_leave_visibility() {
+        let mut g = Game::default();
+        let mut c = Channel::new(1);
+        g.baselines.insert(
+            2,
+            EntityState {
+                number: 2,
+                model: 255,
+                origin: [10., 20., 30.],
+                solid: 1,
+                ..Default::default()
+            },
+        );
+        g.parse(&frame(1, -1, &[0, 2]), &mut c).unwrap();
+        assert_eq!(g.entities[&2].origin, [10., 20., 30.]);
+        let mut change = vec![1, 2];
+        change.extend(800i16.to_le_bytes());
+        g.parse(&frame(2, 1, &change), &mut c).unwrap();
+        assert_eq!(g.entities[&2].origin, [100., 20., 30.]);
+        assert_eq!(g.entities[&2].model, 255);
+        g.parse(&frame(3, 2, &[64, 2]), &mut c).unwrap();
+        assert!(!g.entities.contains_key(&2));
+    }
+    #[test]
+    fn missing_delta_base_requests_full_state() {
+        let mut g = Game::default();
+        g.parse(&frame(20, 19, &[]), &mut Channel::new(1)).unwrap();
+        assert_eq!(g.last_frame, -1);
+        assert!(g.last_snapshot.is_none());
+    }
+}

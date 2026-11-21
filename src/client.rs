@@ -44,9 +44,9 @@ impl Client {
     pub fn connect(config: Config) -> Result<Self, Error> {
         config.validate()?;
         let bind = if config.server.is_ipv4() {
-            "0.0.0.0:0"
+            format!("0.0.0.0:{}", config.local_port)
         } else {
-            "[::]:0"
+            format!("[::]:{}", config.local_port)
         };
         let socket = UdpSocket::bind(bind).map_err(io)?;
         socket.connect(config.server).map_err(io)?;
@@ -293,6 +293,20 @@ fn movement(action: &Action, game: &Game) -> UserCmd {
         msec: 50,
     }
 }
+fn inventory_due(game: &Game, interval: Option<Duration>, elapsed: Duration) -> bool {
+    let Some(interval) = interval else {
+        return false;
+    };
+    game.spawned
+        && game.player.pm_type == 0
+        && game.player.stats[1] > 0
+        && elapsed
+            >= if game.inventory_pending {
+                interval.max(Duration::from_secs(4))
+            } else {
+                interval
+            }
+}
 fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) -> Result<(), Error> {
     let mut connection = 1;
     let mut map_epoch = 0;
@@ -409,17 +423,10 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                         .unwrap_or_default()
                 };
                 if fresh {
-                    if let Some(interval) = cfg.inventory_interval {
-                        let retry = if game.inventory_pending {
-                            interval.max(Duration::from_secs(4))
-                        } else {
-                            interval
-                        };
-                        if inventory.elapsed() >= retry {
-                            ch.command("inven".into());
-                            game.inventory_pending = true;
-                            inventory = now;
-                        }
+                    if inventory_due(&game, cfg.inventory_interval, inventory.elapsed()) {
+                        ch.command("inven".into());
+                        game.inventory_pending = true;
+                        inventory = now;
                     }
                     if let Some(w) = &action.use_weapon {
                         if weapon_at.elapsed() >= Duration::from_millis(250)
@@ -459,6 +466,34 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inventory_poll_waits_until_alive_and_retries_missing_replies() {
+        let mut game = Game {
+            spawned: true,
+            ..Default::default()
+        };
+        let interval = Some(Duration::from_secs(2));
+        assert!(!inventory_due(&game, interval, Duration::from_secs(10)));
+        game.player.stats[1] = 100;
+        assert!(inventory_due(&game, interval, Duration::from_secs(3)));
+        game.inventory_pending = true;
+        assert!(!inventory_due(&game, interval, Duration::from_secs(3)));
+        assert!(inventory_due(&game, interval, Duration::from_secs(5)));
+        game.player.pm_type = 2;
+        assert!(!inventory_due(&game, interval, Duration::from_secs(5)));
+        game.player.pm_type = 0;
+        assert!(!inventory_due(&game, None, Duration::from_secs(5)));
+        let mut packet = vec![5];
+        for n in 0..256 {
+            packet.extend((if n == 7 { 50i16 } else { 0i16 }).to_le_bytes());
+        }
+        let mut channel = Channel::new(123);
+        game.parse(&packet, &mut channel).unwrap();
+        assert_eq!(game.inventory[7], 50);
+        assert!(!game.inventory_pending);
+        assert_eq!(game.inventory_updates, 1);
+        assert!(channel.packet(&[]).windows(7).any(|w| w == b"putaway"));
+    }
     #[test]
     fn neutral_input_preserves_negative_pitch() {
         let mut game = Game::default();

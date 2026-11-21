@@ -2,7 +2,7 @@
 
 ## Lifecycle and timing
 
-`Client::connect(Config)` performs a bounded synchronous handshake, then starts a private network thread. Each client uses its own UDP socket and qport. It needs no async runtime. Server addresses are resolved socket addresses; callers can use Rust's `ToSocketAddrs` for DNS.
+`Client::connect(Config)` performs a bounded synchronous handshake, then starts a private network thread. Each client uses its own UDP socket and qport. `Config.local_port` defaults to zero (an available port); set it to a fixed, unique port if needed. It needs no async runtime. Server addresses are resolved socket addresses; callers can use Rust's `ToSocketAddrs` for DNS.
 
 `observation()` clones the latest publication without blocking on a packet. `wait_for_update()` waits for a newer publication, returning `None` on a wait timeout. Publication is approximately 20 Hz, so multiple observations can have the same server frame. Check `frame` if a policy should run only on fresh snapshots. The server remains authoritative; there is no client prediction.
 
@@ -33,7 +33,7 @@ Player slots are zero based; player entity IDs are `slot + 1`. `players` include
 
 `health()`, `ammo()`, `armor()` and `score()` read conventional HUD slots. `ctf_hud()` reads classic flag icons and capture totals. HUD definitions are mod-specific; these are not authoritative per-player capture events. Raw player stats remain available. There is no brittle parsing of kill announcements into an inferred scoreboard.
 
-Inventory is a polled snapshot, not a promise of current ownership: inspect its `age` and `updates`. It starts as `None` and clears on map changes. Models, skins and other configstrings can arrive incrementally during setup.
+Inventory is polled only while alive (`pm_type=0`, health positive). It is a polled snapshot, not a promise of current ownership: inspect its `age` and `updates`. It starts as `None` and clears on map changes. Models, skins and other configstrings can arrive incrementally during setup.
 
 Events include messages, center prints, layouts, sound, muzzle flashes and temporary effects. `events` is a rolling 256-record history repeated in observations. Deduplicate by `(connection_epoch, event.id)`; IDs increase within a connection across maps. If IDs skip beyond your last seen record, older events have been evicted. Map changes clear the history and emit a map event. Temporary effects retain the discriminator and remaining bytes rather than pretending to provide a complete semantic effects API. Muzzle flashes include non-weapon effects, so they are not inherently proof of damage or a kill.
 

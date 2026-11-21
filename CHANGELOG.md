@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+Added configurable UDP source ports and a public version constant for consumer diagnostics. Inventory polling now waits for a living, active player so it does not toggle spectator/join menus.
+
 ## 0.1.0
 
 Initial extraction of an independent protocol-34 player interface: background connection lifecycle, typed observations and timed input, classic CTF HUD/team plumbing, examples and tests. Navigation, combat policies and deployment configuration are intentionally outside this crate.

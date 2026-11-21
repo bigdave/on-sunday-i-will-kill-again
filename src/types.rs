@@ -48,6 +48,8 @@ impl DeathmatchTeamRule {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub server: SocketAddr,
+    /// UDP source port; zero asks the operating system for an available port.
+    pub local_port: u16,
     pub name: String,
     pub skin: String,
     /// Classic CTF only. For base-game team deathmatch set `skin` and leave this None.
@@ -66,6 +68,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 27910),
+            local_port: 0,
             name: "RustPlayer".into(),
             skin: "male/grunt".into(),
             team: None,

@@ -11,6 +11,8 @@ mod game;
 mod salt;
 mod types;
 mod wire;
+/// Version of the linked interface implementation.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use client::Client;
 pub use types::*;
 pub use wire::{EntityState, PlayerState};
