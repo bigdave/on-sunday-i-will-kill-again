@@ -1,0 +1,7 @@
+/target/
+/validation/
+*.pak
+*.bsp
+*.nav
+*.nav2
+.env

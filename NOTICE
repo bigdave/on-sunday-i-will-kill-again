@@ -1,0 +1,14 @@
+Quake II Player Interface
+
+Protocol implementation and checksum data adapted from GPL Quake II / Q2PRO.
+Copyright (C) 1997-2001 id Software, Inc., and Q2PRO contributors.
+https://github.com/q2pro/q2pro
+Reference revision: 601a8df8433b0c50dbbe37c0716c3793fff140a7
+src/common/net/chan.c, src/common/msg.c, src/common/crc.c,
+src/client/parse.c, inc/common/protocol.h.
+
+The Rust implementation is distributed under GPL version 2 or, at your option,
+any later version. See LICENSE. Preserve this attribution in redistributions.
+
+No Quake II game assets, map data, navigation, combat policy, learned state,
+team strategy, or private deployment/monitoring configuration is included.

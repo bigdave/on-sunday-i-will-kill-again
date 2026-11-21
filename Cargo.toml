@@ -1,0 +1,13 @@
+[package]
+name = "quake2-player"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "A headless Quake II protocol 34 player connection for independent Rust bots"
+readme = "README.md"
+keywords = ["quake2", "ctf", "bots", "protocol", "client"]
+categories = ["game-development", "network-programming"]
+exclude = ["validation", "*.pak", "*.bsp", "*.nav", "*.nav2"]
+
+[profile.release]
+opt-level = 2
