@@ -8,6 +8,7 @@ A standalone Rust library that connects to classic Quake II as an ordinary playe
 - Independent background networking at 20 input updates per second.
 - Player/entity state, player names and teams, inventory, model/sound/item names and classic CTF HUD values.
 - Movement, aiming, attack/respawn input, weapon selection, CTF team joining and classic skin/model team identification.
+- Optional `human_limitations_v1` capability profile; disabled by default.
 - Bounded event history, expiring input, stale-observation rejection, map changes and server-requested reconnects.
 
 Navigation, map geometry, line-of-sight calculations, target selection, combat policy, learning and team coordination belong in your bot. There is no built-in AI, renderer, JSON service or deployment integration.
@@ -60,6 +61,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `connect()` returns after the network handshake; wait for `ready` before controlling the player. Submit fresh actions regularly. Dropping the client disconnects and joins its network worker. Create multiple clients for multiple players, in one process or separate processes.
 
+## Optional human limitations
+
+Available on `codex/human-limitations-v1` (not the existing v0.1.1 release tag). To use this profile before a tagged release:
+
+```toml
+[dependencies]
+on-sunday-i-will-kill-again = { git = "https://github.com/bigdave/on-sunday-i-will-kill-again", branch = "codex/human-limitations-v1" }
+```
+
+For a competition, replace `branch` with `rev` set to the agreed commit SHA so every team uses exactly the same implementation. Enable the profile explicitly:
+
+```rust
+use on_sunday_i_will_kill_again::{Config, PlayerCapabilities};
+let mut config = Config::new("127.0.0.1:27910".parse().unwrap(), "MyBot");
+config.capabilities = Some(PlayerCapabilities::human_limitations_v1());
+```
+
+Leave `capabilities = None` (the default) for the existing unrestricted behavior. The named v1 profile has fixed parameters, independent of the bot name, with no randomness:
+
+| Property | v1 behavior |
+| --- | --- |
+| Perception delay | At least 200 ms for gameplay observations, including self state, HUD, inventory, and events |
+| Field of view | 110° horizontal × 80° vertical; entity origins tested against the controlled camera, own entity retained |
+| Turn speed | At most 360°/s combined pitch/yaw |
+| Angular acceleration | At most 1440°/s² combined pitch/yaw controller acceleration; hard pitch stops at ±89° |
+| Roll | Zero |
+| Input / publication rate | Existing 20 Hz worker; extra calls cannot advance the limiter |
+| Random aim error | None; prediction and accurate tracking remain useful |
+
+Both `observation()` and `wait_for_update()` expose only processed publications. During delay warmup or stale snapshots, `ready` is false and gameplay data is empty. Lifecycle invalidation is immediate: map/reconnection changes clear the delay queue, preventing old-map data from resurfacing. Snapshot and inventory ages include the intentional delay. Camera state resets for server delta-angle changes and respawn; these server-driven changes are not voluntary turns.
+
+With the profile enabled, `Action.view` is a desired orientation. Movement supplied with that orientation is rotated into the limited camera's axes to preserve the intended world travel direction, subject to normal input clamps. Attack is still the bot's decision and fires along the actual limited view, not the requested target. `view=None` brakes angular motion. Expired input immediately releases movement and attack while angular motion brakes. There is no extra action delay on top of the observation delay.
+
+Sound events retain sound identity and volume but remove exact source position, entity and channel; out-of-view muzzle flashes and opaque temporary-effect payloads are removed. Public roster/config strings, text and scoreboard layouts are retained but delayed.
+
+**FOV is not wall occlusion.** The crate still has no map geometry: in-frustum network entities can be behind walls. Bots must supply geometry checks separately, and this profile does not model partial visibility, directional hearing or a human's complete perception. This is an opt-in convention, not enforcement against modified clients. New balancing parameters should use a new profile version rather than silently changing v1.
+
 ## Compatibility and observations
 
 Validated locally with Q2PRO serving protocol 34:
@@ -75,7 +113,7 @@ For base-game team deathmatch, leave `Config.team=None` and choose `Config.skin`
 
 These checks use disposable fixture modules for positioning, loadouts and health; ordinary combat, scoring and team rules are unchanged. This is an initial 0.1 API, not a guarantee for every mod or server. Extended protocols and the 2023 rerelease are unsupported.
 
-Snapshots are **network information, not human vision**. Potentially visible set (PVS) updates can contain entities behind walls or behind the player; absence does not prove an entity no longer exists. Collision tests and fair perception rules must be supplied separately. The crate is not a competition sandbox or anti-cheat system.
+Snapshots are **network information, not human vision**. Potentially visible set (PVS) updates can contain entities behind walls or behind the player; absence does not prove an entity no longer exists. The optional profile supplies the timing and FOV restrictions described above; collision/occlusion tests must still be supplied separately. The crate is not a competition sandbox or anti-cheat system.
 
 See [the interface contract](docs/interface.md), [server setup](docs/server.md), and [testing](docs/testing.md).
 

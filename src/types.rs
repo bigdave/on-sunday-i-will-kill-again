@@ -5,6 +5,19 @@ use std::{
     time::Duration,
 };
 
+/// Versioned, fixed capability profiles. No randomness or per-bot tuning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayerCapabilities {
+    /// 200 ms observation delay, 110 x 80 degree FOV, 360 deg/s turning,
+    /// 1440 deg/s² angular acceleration, and 20 Hz inputs.
+    HumanLimitationsV1,
+}
+impl PlayerCapabilities {
+    pub const fn human_limitations_v1() -> Self {
+        Self::HumanLimitationsV1
+    }
+}
+
 /// Classic CTF team selection, not an assignment of tactical roles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Team {
@@ -48,6 +61,8 @@ impl DeathmatchTeamRule {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub server: SocketAddr,
+    /// Opt-in common player limitations. None preserves unrestricted behavior.
+    pub capabilities: Option<PlayerCapabilities>,
     /// UDP source port; zero asks the operating system for an available port.
     pub local_port: u16,
     pub name: String,
@@ -68,6 +83,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 27910),
+            capabilities: None,
             local_port: 0,
             name: "RustPlayer".into(),
             skin: "male/grunt".into(),
@@ -260,7 +276,8 @@ pub struct Observation {
     pub map: String,
     pub slot: Option<usize>,
     pub player: PlayerState,
-    /// Network snapshot entities, NOT visibility-filtered vision. See docs.
+    /// Network snapshot entities; the optional capability profile applies FOV filtering.
+    /// Neither mode provides map-geometry occlusion. See docs.
     pub entities: BTreeMap<u16, EntityState>,
     pub players: Vec<PlayerInfo>,
     pub models: Vec<String>,

@@ -1,11 +1,12 @@
 //! A headless ordinary-player connection for classic Quake II (protocol 34).
 //!
 //! This crate owns UDP setup, reliable commands, snapshot decoding and timed
-//! player input. It owns no navigation, collision map, perception policy,
+//! player input. It owns no navigation, collision map, map-based visibility,
 //! combat decisions, team coordination, game assets or monitoring integration.
 //!
 //! See `examples/passive.rs` for the minimum client lifecycle.
 #![doc = include_str!("../README.md")]
+mod capabilities;
 mod client;
 mod game;
 mod salt;

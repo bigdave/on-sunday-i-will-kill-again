@@ -16,7 +16,7 @@ Defaults: input period 50 ms, action lifetime 300 ms, snapshot freshness 500 ms,
 
 | Field | Meaning |
 | --- | --- |
-| `view` | Optional world angles in degrees. Pitch positive looks down, yaw 0 faces +X and 90 faces +Y; roll is normally zero. Pitch is clamped to ±89°. Server delta-angle offsets are handled internally. `None` keeps the last server view. |
+| `view` | Optional world angles in degrees. Pitch positive looks down, yaw 0 faces +X and 90 faces +Y; roll is normally zero. Pitch is clamped to ±89°. Server delta-angle offsets are handled internally. `None` keeps the last server view in unrestricted mode; see the optional profile below. |
 | `forward` | Forward/backward input, clamped to ±400. This is a movement command, not a guaranteed world velocity. |
 | `side` | Positive moves right, negative left, clamped to ±400. |
 | `up` | Positive jumps/swims up; negative crouches/swims down. ±200 is conventional. Release between successive jumps. |
@@ -38,6 +38,14 @@ Inventory is polled only while alive (`pm_type=0`, health positive). It is a pol
 Events include messages, center prints, layouts, sound, muzzle flashes and temporary effects. `events` is a rolling 256-record history repeated in observations. Deduplicate by `(connection_epoch, event.id)`; IDs increase within a connection across maps. If IDs skip beyond your last seen record, older events have been evicted. Map changes clear the history and emit a map event. Temporary effects retain the discriminator and remaining bytes rather than pretending to provide a complete semantic effects API. Muzzle flashes include non-weapon effects, so they are not inherently proof of damage or a kill.
 
 `decode_errors` counts malformed or unsupported packets; `ProtocolWarning` events explain recent failures. Lost delta bases request a full snapshot. A single bad packet does not kill the connection. Unsupported protocol negotiation is terminal. Limits include 64 delta frames, 256 event records, 256 player/config lookup slots, entity IDs up to 8191, and 128 pending reliable commands. Pending duplicate commands are coalesced; excess commands are dropped if the queue is full. Snapshot clones cost memory proportional to currently known entities, so keep only the observations your policy needs.
+
+## Optional capability profile
+
+`Config.capabilities` defaults to `None`, retaining the existing transport behavior. Set it to `Some(PlayerCapabilities::human_limitations_v1())` to use the fixed limits documented in the README. The private worker applies turn limits once per 50 ms tick and delays/FOV-filters observations before publishing shared state. No public raw-observation accessor is available on that client. Extra submissions replace pending input; extra reads clone the same processed publication.
+
+Profile publications have a current local sequence/context but delayed gameplay data. Continue submitting against the received publication; the existing action timeout measures publication/submission freshness, not the artificial perception delay. `snapshot_age` and inventory age include the delay. Readiness becomes false immediately when the underlying snapshot is stale, and old queued data is discarded. The queue is bounded to eight snapshots (normally four await release).
+
+The limited view in `player.view_angles` is the camera used for that delayed observation. Forward/side input paired with a desired view is transformed into the limited camera frame, with the existing ±400 component clamps. Roll requests are ignored. Angular state resets on a context change, server delta-angle correction or respawn. None of these profile behaviors apply when disabled.
 
 ## Competition boundary
 

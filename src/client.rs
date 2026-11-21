@@ -1,4 +1,5 @@
 use crate::{
+    capabilities::Capabilities,
     game::Game,
     types::*,
     wire::{self, Channel, UserCmd},
@@ -230,11 +231,19 @@ fn handshake(socket: &UdpSocket, qport: u16, cfg: &Config, stop: &AtomicBool) ->
         Err(Error::Timeout)
     }
 }
-fn publish(game: &Game, shared: &Shared, id: u64, connection: u64, errors: u64, cfg: &Config) {
+fn publish(
+    game: &Game,
+    shared: &Shared,
+    id: u64,
+    connection: u64,
+    errors: u64,
+    cfg: &Config,
+    limits: &mut Capabilities,
+) {
     let age = game.last_snapshot.map(|t| t.elapsed());
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     let sequence = state.observation.sequence + 1;
-    state.observation = Observation {
+    let raw = Observation {
         context: Context {
             client_id: id,
             connection_epoch: connection,
@@ -272,6 +281,7 @@ fn publish(game: &Game, shared: &Shared, id: u64, connection: u64, errors: u64, 
         decode_errors: errors,
         error: None,
     };
+    state.observation = limits.observation(raw, Instant::now());
     shared.changed.notify_all();
 }
 fn movement(action: &Action, game: &Game) -> UserCmd {
@@ -308,6 +318,7 @@ fn inventory_due(game: &Game, interval: Option<Duration>, elapsed: Duration) -> 
             }
 }
 fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) -> Result<(), Error> {
+    let mut limits = Capabilities::new(cfg.capabilities);
     let mut connection = 1;
     let mut map_epoch = 0;
     let mut ch = Channel::new(qport);
@@ -376,7 +387,7 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                     ..Default::default()
                 };
                 commands = [UserCmd::default(); 3];
-                publish(&game, shared, id, connection, errors, cfg);
+                publish(&game, shared, id, connection, errors, cfg, &mut limits);
                 handshake(&socket, qport, cfg, &shared.stop)?;
                 socket.set_nonblocking(true).map_err(io)?;
                 ch = Channel::new(qport);
@@ -422,6 +433,7 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                         .map(|i| i.action.clone())
                         .unwrap_or_default()
                 };
+                let action = limits.action(action, &game.player, context);
                 if fresh {
                     if inventory_due(&game, cfg.inventory_interval, inventory.elapsed()) {
                         ch.command("inven".into());
@@ -449,7 +461,7 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                 };
                 let payload = wire::movement(game.last_frame, ch.outgoing, &commands);
                 socket.send(&ch.packet(&payload)).map_err(io)?;
-                publish(&game, shared, id, connection, errors, cfg);
+                publish(&game, shared, id, connection, errors, cfg, &mut limits);
                 next = now + TICK;
             }
             thread::sleep(Duration::from_millis(1));
@@ -466,6 +478,60 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn public_read_apis_share_only_the_processed_publication() {
+        let mut limits = Capabilities::new(Some(PlayerCapabilities::human_limitations_v1()));
+        let now = Instant::now();
+        let mut raw = Observation {
+            connected: true,
+            ready: true,
+            sequence: 1,
+            ..Default::default()
+        };
+        raw.entities.insert(
+            2,
+            crate::EntityState {
+                origin: [-100., 0., 0.],
+                ..Default::default()
+            },
+        );
+        let warmup = limits.observation(raw.clone(), now);
+        assert!(!warmup.ready);
+        raw.sequence = 2;
+        let processed = limits.observation(raw, now + Duration::from_millis(200));
+        let mut client = Client {
+            shared: Arc::new(Shared {
+                state: Mutex::new(State {
+                    observation: processed,
+                    input: None,
+                    closed: false,
+                    error: None,
+                }),
+                changed: Condvar::new(),
+                stop: AtomicBool::new(false),
+            }),
+            worker: None,
+            seen: 0,
+            config: Config {
+                capabilities: Some(PlayerCapabilities::human_limitations_v1()),
+                ..Default::default()
+            },
+        };
+        let first = client.observation();
+        assert!(first.ready && first.entities.is_empty());
+        assert_eq!(
+            format!("{first:?}"),
+            format!(
+                "{:?}",
+                client.wait_for_update(Duration::ZERO).unwrap().unwrap()
+            )
+        );
+        for _ in 0..1000 {
+            client.submit(&first, Action::default()).unwrap();
+        }
+        assert_eq!(client.observation().sequence, first.sequence);
+        assert!(client.wait_for_update(Duration::ZERO).unwrap().is_none());
+    }
     #[test]
     fn inventory_poll_waits_until_alive_and_retries_missing_replies() {
         let mut game = Game {
