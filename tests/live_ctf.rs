@@ -1,5 +1,7 @@
 //! Opt-in integration test. See docs/testing.md for external asset requirements.
-use quake2_player::{Action, Client, Config, Error, Event, Observation, Team, ViewAngles};
+use on_sunday_i_will_kill_again::{
+    Action, Client, Config, Error, Event, Observation, Team, ViewAngles,
+};
 use std::{
     env,
     fs::File,
@@ -55,7 +57,10 @@ fn classic_ctf_lifecycle() {
         .local_addr()
         .unwrap()
         .port();
-    let log_path = env::temp_dir().join(format!("quake2-player-test-{}.log", std::process::id()));
+    let log_path = env::temp_dir().join(format!(
+        "on-sunday-i-will-kill-again-test-{}.log",
+        std::process::id()
+    ));
     let log = File::create(&log_path).unwrap();
     let mut server = Server(
         Command::new(engine)

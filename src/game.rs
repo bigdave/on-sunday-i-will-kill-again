@@ -115,7 +115,7 @@ impl Game {
                     ch.command(cmd.to_string());
                 } else if cmd.starts_with("\u{7f}c version") {
                     ch.command(format!(
-                        "\u{7f}c version Quake2Player-{}",
+                        "\u{7f}c version on-sunday-i-will-kill-again-{}",
                         env!("CARGO_PKG_VERSION")
                     ));
                 }

@@ -1,5 +1,5 @@
 //! Deliberately inert policy scaffold. Replace decide() with your bot logic.
-use quake2_player::{Action, Client, Config, Observation, Team};
+use on_sunday_i_will_kill_again::{Action, Client, Config, Observation, Team};
 use std::{error::Error, time::Duration};
 fn decide(_observation: &Observation) -> Action {
     // Your policy owns navigation, perception, weapons, tactics and respawning.

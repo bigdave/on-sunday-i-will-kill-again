@@ -1,5 +1,5 @@
 //! Connect as an ordinary player, report state, then disconnect. No AI.
-use quake2_player::{Client, Config, Team};
+use on_sunday_i_will_kill_again::{Client, Config, Team};
 use std::{
     error::Error,
     time::{Duration, Instant},

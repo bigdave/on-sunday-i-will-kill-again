@@ -1,4 +1,4 @@
-# quake2-player
+# on-sunday-i-will-kill-again
 
 A standalone Rust library that connects to classic Quake II as an ordinary player. Build a CTF bot by reading observations and submitting player input; the library handles the network connection. It has no external Rust dependencies and needs no game assets on the client.
 
@@ -27,11 +27,11 @@ For another local Rust project, add a path dependency (adjust the path):
 
 ```toml
 [dependencies]
-quake2-player = { path = "../quake2-player" }
+on-sunday-i-will-kill-again = { path = "../on-sunday-i-will-kill-again" }
 ```
 
 ```rust,no_run
-use quake2_player::{Action, Client, Config, Team};
+use on_sunday_i_will_kill_again::{Action, Client, Config, Team};
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -76,7 +76,7 @@ impl Client {
         let copy = shared.clone();
         let cfg = config.clone();
         let worker = thread::Builder::new()
-            .name("quake2-player-network".into())
+            .name("on-sunday-i-will-kill-again-network".into())
             .spawn(move || {
                 let result = run(socket, qport, &cfg, &copy, id);
                 let mut state = copy.state.lock().unwrap_or_else(|e| e.into_inner());
