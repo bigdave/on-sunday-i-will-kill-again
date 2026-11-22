@@ -455,8 +455,10 @@ mod tests {
             assert!(game.match_status().is_empty());
             assert!(game.ctf_match_status.iter().all(String::is_empty));
         }
-        let mut game = Game::default();
-        game.ctf_match_status = ["SETUP: 10 not ready".into(), "0".into()];
+        let mut game = Game {
+            ctf_match_status: ["SETUP: 10 not ready".into(), "0".into()],
+            ..Default::default()
+        };
         game.player.stats[28] = 28;
         assert_eq!(game.match_status(), "SETUP: 10 not ready");
     }
