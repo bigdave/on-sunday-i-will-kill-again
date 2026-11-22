@@ -47,7 +47,7 @@ pub(crate) struct Game {
     pub(crate) last_snapshot: Option<Instant>,
     pub(crate) map_epoch: u64,
     pub(crate) game_dir: String,
-    pub(crate) ctf_match_status: String,
+    pub(crate) ctf_match_status: [String; 2],
     pub(crate) events: VecDeque<EventRecord>,
     pub(crate) event_sequence: u64,
 }
@@ -80,13 +80,20 @@ impl Default for Game {
             last_snapshot: None,
             map_epoch: 0,
             game_dir: String::new(),
-            ctf_match_status: String::new(),
+            ctf_match_status: Default::default(),
             events: VecDeque::new(),
             event_sequence: 0,
         }
     }
 }
 impl Game {
+    pub(crate) fn match_status(&self) -> &str {
+        match self.player.stats[28] {
+            28 | 29 => &self.ctf_match_status[self.player.stats[28] as usize - 28],
+            _ => "",
+        }
+    }
+
     pub(crate) fn event(&mut self, event: Event) {
         self.event_sequence += 1;
         if self.events.len() == 256 {
@@ -230,7 +237,7 @@ impl Game {
                     self.map = r.string()?;
                     self.map_epoch += 1;
                     self.game_dir = game;
-                    self.ctf_match_status.clear();
+                    self.ctf_match_status.fill(String::new());
                     self.events.clear();
                     self.frames.clear();
                     self.last_snapshot = None;
@@ -265,9 +272,10 @@ impl Game {
                         self.models[1] = s;
                     } else if (1056..1312).contains(&n) {
                         self.item_names[n as usize - 1056] = s;
-                    } else if n == 29 {
-                        // id CTF CONFIG_CTF_MATCH = CS_MAXCLIENTS - 1.
-                        self.ctf_match_status = s;
+                    } else if (28..=29).contains(&n) {
+                        // Original id CTF uses 29; current forks use 28.
+                        // STAT_CTF_MATCH selects which string is actually on the HUD.
+                        self.ctf_match_status[n as usize - 28] = s;
                     } else if n == 30 {
                         self.max_clients = s.parse::<usize>().unwrap_or(9).min(256);
                     } else if (32..288).contains(&n) {
@@ -423,24 +431,34 @@ mod tests {
         }
     }
     #[test]
-    fn competition_status_decodes_clears_and_resets_on_map_change() {
-        let mut game = Game::default();
-        let mut channel = Channel::new(1);
-        for status in [
-            "SETUP: 10 not ready",
-            "00:20 UNTIL START",
-            "20:00 MATCH",
-            "",
-        ] {
-            let mut packet = vec![13, 29, 0];
-            packet.extend_from_slice(status.as_bytes());
-            packet.push(0);
-            game.parse(&packet, &mut channel).unwrap();
-            assert_eq!(game.ctf_match_status, status);
+    fn competition_status_follows_hud_slot_and_resets_on_map_change() {
+        for slot in [28u8, 29] {
+            let mut game = Game::default();
+            let mut channel = Channel::new(1);
+            for status in [
+                "SETUP: 10 not ready",
+                "00:20 UNTIL START",
+                "20:00 MATCH",
+                "",
+            ] {
+                let mut packet = vec![13, slot, 0];
+                packet.extend_from_slice(status.as_bytes());
+                packet.push(0);
+                game.parse(&packet, &mut channel).unwrap();
+                game.player.stats[28] = 0;
+                assert!(game.match_status().is_empty());
+                game.player.stats[28] = slot as i16;
+                assert_eq!(game.match_status(), status);
+            }
+            game.ctf_match_status[(slot - 28) as usize] = "old match".into();
+            game.parse(&serverdata(43), &mut channel).unwrap();
+            assert!(game.match_status().is_empty());
+            assert!(game.ctf_match_status.iter().all(String::is_empty));
         }
-        game.ctf_match_status = "old match".into();
-        game.parse(&serverdata(43), &mut channel).unwrap();
-        assert!(game.ctf_match_status.is_empty());
+        let mut game = Game::default();
+        game.ctf_match_status = ["SETUP: 10 not ready".into(), "0".into()];
+        game.player.stats[28] = 28;
+        assert_eq!(game.match_status(), "SETUP: 10 not ready");
     }
     #[test]
     fn setup_text_does_not_execute_arbitrary_console_commands() {

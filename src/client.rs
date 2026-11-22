@@ -302,7 +302,7 @@ fn publish(
         ready: game.spawned && age.map(|a| a <= cfg.snapshot_timeout).unwrap_or(false),
         frame: game.last_frame,
         game_dir: game.game_dir.clone(),
-        ctf_match_status: game.ctf_match_status.clone(),
+        ctf_match_status: game.match_status().into(),
         map: game.map.clone(),
         slot: usize::try_from(game.slot).ok(),
         player: game.player.clone(),
