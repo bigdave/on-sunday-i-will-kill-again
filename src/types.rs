@@ -273,6 +273,9 @@ pub struct Observation {
     pub ready: bool,
     pub frame: i32,
     pub game_dir: String,
+    /// Classic CTF public competition HUD text (setup, countdown, or match).
+    /// Empty when the server does not supply it. Subject to capability observation delay.
+    pub ctf_match_status: String,
     pub map: String,
     pub slot: Option<usize>,
     pub player: PlayerState,

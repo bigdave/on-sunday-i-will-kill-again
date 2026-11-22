@@ -131,3 +131,21 @@ The live mode tests are opt-in and requires separately installed legal game data
 ## License
 
 GPL-2.0-or-later. Protocol code and checksum data derive from Quake II / Q2PRO; see [NOTICE](./NOTICE) and [LICENSE](./LICENSE). Preserve those notices and account for GPL obligations when distributing derivative programs. The game assets have separate licensing.
+
+### Competition readiness (0.3.0)
+
+`Observation::ctf_match_status` exposes classic CTF's public match HUD text,
+including `SETUP: … not ready`, `… UNTIL START`, and `… MATCH`. It is empty
+when unavailable and follows the selected capability profile's observation delay.
+This field is separate from `Observation::ready`, which means a fresh playable
+snapshot, **not** competition commitment.
+
+Call `client.ready_up(&observation)?` to queue the ordinary player `ready`
+command. The caller decides when the team is assembled. There is no automatic
+readiness by default and no administrative start command. Requests coalesce,
+expire with `Config::action_timeout`, cannot cross map/reconnect contexts, and
+are sent at most once every two seconds. Server rules still decide whether the
+player may ready up. `human_limitations_v1` is unchanged.
+
+Version 0.3.0 adds a public observation field; users constructing complete
+`Observation` literals should add the field or use `..Default::default()`.

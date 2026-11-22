@@ -22,9 +22,14 @@ struct Input {
     at: Instant,
     action: Action,
 }
+struct ReadyRequest {
+    context: Context,
+    at: Instant,
+}
 struct State {
     observation: Observation,
     input: Option<Input>,
+    ready_request: Option<ReadyRequest>,
     closed: bool,
     error: Option<Error>,
 }
@@ -68,6 +73,7 @@ impl Client {
                     ..Default::default()
                 },
                 input: None,
+                ready_request: None,
                 closed: false,
                 error: None,
             }),
@@ -145,6 +151,27 @@ impl Client {
         });
         Ok(())
     }
+    /// Queue the ordinary classic CTF `ready` command against a fresh observation.
+    /// This is explicit opt-in, not a toggle or an administrative match start.
+    /// Repeated requests coalesce; the worker sends at most once every two seconds.
+    /// Pending requests expire after action_timeout and never cross map/reconnect contexts.
+    pub fn ready_up(&self, observation: &Observation) -> Result<(), Error> {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.closed {
+            return Err(state.error.clone().unwrap_or(Error::Closed));
+        }
+        if !observation.ready
+            || !observation.connected
+            || !valid_context(observation, &state.observation, self.config.action_timeout)
+        {
+            return Err(Error::StaleObservation);
+        }
+        state.ready_request = Some(ReadyRequest {
+            context: observation.context,
+            at: Instant::now(),
+        });
+        Ok(())
+    }
     pub fn close(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.worker.take() {
@@ -156,6 +183,27 @@ impl Drop for Client {
     fn drop(&mut self) {
         self.close();
     }
+}
+fn take_ready_request(
+    request: &mut Option<ReadyRequest>,
+    context: Context,
+    now: Instant,
+    last: Instant,
+    ttl: Duration,
+    fresh: bool,
+) -> bool {
+    let Some(pending) = request.as_ref() else {
+        return false;
+    };
+    if pending.context != context || now.duration_since(pending.at) > ttl {
+        *request = None;
+        return false;
+    }
+    if !fresh || now.duration_since(last) < Duration::from_secs(2) {
+        return false;
+    }
+    *request = None;
+    true
 }
 fn io(e: std::io::Error) -> Error {
     Error::Io(e.to_string())
@@ -254,6 +302,7 @@ fn publish(
         ready: game.spawned && age.map(|a| a <= cfg.snapshot_timeout).unwrap_or(false),
         frame: game.last_frame,
         game_dir: game.game_dir.clone(),
+        ctf_match_status: game.ctf_match_status.clone(),
         map: game.map.clone(),
         slot: usize::try_from(game.slot).ok(),
         player: game.player.clone(),
@@ -333,6 +382,7 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
     let mut inventory = Instant::now() - Duration::from_secs(10);
     let mut weapon = String::new();
     let mut weapon_at = Instant::now() - Duration::from_secs(10);
+    let mut ready_at = Instant::now() - Duration::from_secs(10);
     let mut errors = 0;
     let mut buf = [0u8; 65536];
     let result = (|| {
@@ -433,6 +483,20 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                         .map(|i| i.action.clone())
                         .unwrap_or_default()
                 };
+                {
+                    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if take_ready_request(
+                        &mut state.ready_request,
+                        context,
+                        now,
+                        ready_at,
+                        cfg.action_timeout,
+                        fresh,
+                    ) {
+                        ch.command("ready".into());
+                        ready_at = now;
+                    }
+                }
                 let action = limits.action(action, &game.player, context);
                 if fresh {
                     if inventory_due(&game, cfg.inventory_interval, inventory.elapsed()) {
@@ -479,6 +543,62 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
 mod tests {
     use super::*;
     #[test]
+    fn readiness_is_bounded_expires_and_cannot_cross_contexts() {
+        let now = Instant::now();
+        let context = Context::default();
+        let ttl = Duration::from_millis(250);
+        let mut request = Some(ReadyRequest { context, at: now });
+        assert!(!take_ready_request(
+            &mut request,
+            context,
+            now,
+            now,
+            ttl,
+            true
+        ));
+        assert!(request.is_some());
+        assert!(take_ready_request(
+            &mut request,
+            context,
+            now,
+            now - Duration::from_secs(2),
+            ttl,
+            true
+        ));
+        assert!(request.is_none());
+        request = Some(ReadyRequest { context, at: now });
+        assert!(!take_ready_request(
+            &mut request,
+            context,
+            now + ttl + Duration::from_millis(1),
+            now - Duration::from_secs(3),
+            ttl,
+            true
+        ));
+        assert!(request.is_none());
+        for changed in [
+            Context {
+                map_epoch: 1,
+                ..context
+            },
+            Context {
+                connection_epoch: 1,
+                ..context
+            },
+        ] {
+            request = Some(ReadyRequest { context, at: now });
+            assert!(!take_ready_request(
+                &mut request,
+                changed,
+                now,
+                now - Duration::from_secs(3),
+                ttl,
+                true
+            ));
+            assert!(request.is_none());
+        }
+    }
+    #[test]
     fn public_read_apis_share_only_the_processed_publication() {
         let mut limits = Capabilities::new(Some(PlayerCapabilities::human_limitations_v1()));
         let now = Instant::now();
@@ -486,6 +606,7 @@ mod tests {
             connected: true,
             ready: true,
             sequence: 1,
+            ctf_match_status: "SETUP: 10 not ready".into(),
             ..Default::default()
         };
         raw.entities.insert(
@@ -497,6 +618,7 @@ mod tests {
         );
         let warmup = limits.observation(raw.clone(), now);
         assert!(!warmup.ready);
+        assert!(warmup.ctf_match_status.is_empty());
         raw.sequence = 2;
         let processed = limits.observation(raw, now + Duration::from_millis(200));
         let mut client = Client {
@@ -504,6 +626,7 @@ mod tests {
                 state: Mutex::new(State {
                     observation: processed,
                     input: None,
+                    ready_request: None,
                     closed: false,
                     error: None,
                 }),
@@ -519,6 +642,11 @@ mod tests {
         };
         let first = client.observation();
         assert!(first.ready && first.entities.is_empty());
+        assert_eq!(first.ctf_match_status, "SETUP: 10 not ready");
+        client.ready_up(&first).unwrap();
+        let mut stale = first.clone();
+        stale.context.map_epoch += 1;
+        assert_eq!(client.ready_up(&stale), Err(Error::StaleObservation));
         assert_eq!(
             format!("{first:?}"),
             format!(
