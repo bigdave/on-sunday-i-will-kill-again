@@ -28,10 +28,19 @@ struct ReadyRequest {
     context: Context,
     at: Instant,
 }
+struct ChatRequest {
+    context: Context,
+    at: Instant,
+    text: String,
+}
+const CHAT_INTERVAL: Duration = Duration::from_secs(5);
 struct State {
     observation: Observation,
     input: Option<Input>,
     ready_request: Option<ReadyRequest>,
+    chat: Option<ChatRequest>,
+    chat_at: Option<Instant>,
+    chat_sent: Option<Instant>,
     closed: bool,
     error: Option<Error>,
 }
@@ -76,6 +85,9 @@ impl Client {
                 },
                 input: None,
                 ready_request: None,
+                chat: None,
+                chat_at: None,
+                chat_sent: None,
                 closed: false,
                 error: None,
             }),
@@ -201,6 +213,39 @@ impl Client {
         });
         Ok(())
     }
+    /// Queue ordinary team chat. Returns false during the five-second cooldown
+    /// or while a message is pending; true means queued, not acknowledged by server.
+    /// One pending message, at most 160 printable ASCII bytes. Console delimiters,
+    /// quotes, backslashes and CTF percent macros are rejected rather than interpreted.
+    /// Requests expire with action_timeout and cannot cross map/reconnect contexts.
+    pub fn say_team(&self, observation: &Observation, text: &str) -> Result<bool, Error> {
+        validate_chat(text)?;
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.closed {
+            return Err(state.error.clone().unwrap_or(Error::Closed));
+        }
+        if !observation.ready
+            || !observation.connected
+            || !valid_context(observation, &state.observation, self.config.action_timeout)
+        {
+            return Err(Error::StaleObservation);
+        }
+        let now = Instant::now();
+        if state.chat.is_some()
+            || state
+                .chat_at
+                .is_some_and(|t| now.duration_since(t) < CHAT_INTERVAL)
+        {
+            return Ok(false);
+        }
+        state.chat = Some(ChatRequest {
+            context: observation.context,
+            at: now,
+            text: text.into(),
+        });
+        state.chat_at = Some(now);
+        Ok(true)
+    }
     pub fn close(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.worker.take() {
@@ -212,6 +257,36 @@ impl Drop for Client {
     fn drop(&mut self) {
         self.close();
     }
+}
+fn validate_chat(text: &str) -> Result<(), Error> {
+    if text.trim().is_empty()
+        || text.len() > 160
+        || !text
+            .bytes()
+            .all(|b| (32..=126).contains(&b) && !b"\"\\;%".contains(&b))
+    {
+        return Err(Error::Configuration("team chat must be 1-160 printable ASCII bytes without quotes, backslashes, semicolons or percent macros".into()));
+    }
+    Ok(())
+}
+fn take_chat(
+    request: &mut Option<ChatRequest>,
+    context: Context,
+    now: Instant,
+    ttl: Duration,
+    fresh: bool,
+    last: Option<Instant>,
+) -> Option<String> {
+    let r = request.as_ref()?;
+    if !fresh || r.context != context || now.duration_since(r.at) > ttl {
+        *request = None;
+        return None;
+    }
+    if last.is_some_and(|t| now.duration_since(t) < CHAT_INTERVAL) {
+        return None;
+    }
+    let r = request.take().unwrap();
+    Some(format!("say_team \"{}\"", r.text))
 }
 fn menu_team_command(o: &Observation, team: Team) -> Option<&'static str> {
     let layout = o
@@ -545,6 +620,18 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                 };
                 {
                     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                    let last_chat = state.chat_sent;
+                    if let Some(command) = take_chat(
+                        &mut state.chat,
+                        context,
+                        now,
+                        cfg.action_timeout,
+                        fresh,
+                        last_chat,
+                    ) {
+                        ch.command(command);
+                        state.chat_sent = Some(now);
+                    }
                     let team = state.ready_request.as_ref().and_then(|r| r.team);
                     let menu = state.ready_request.as_ref().and_then(|r| r.menu);
                     if take_ready_request(
@@ -607,6 +694,60 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn team_chat_rejects_injection_and_discards_stale_messages() {
+        for bad in ["", " ", "hello\nquit", "hello;quit", "\"", "\\", "%n", "é"] {
+            assert!(validate_chat(bad).is_err(), "{bad:?}");
+        }
+        assert!(validate_chat(&"a".repeat(161)).is_err());
+        assert!(validate_chat("I'm going for the flag.").is_ok());
+        let now = Instant::now();
+        let c = Context::default();
+        let ttl = Duration::from_millis(250);
+        let request = || {
+            Some(ChatRequest {
+                context: c,
+                at: now,
+                text: "Group up at our base entrance.".into(),
+            })
+        };
+        assert_eq!(
+            take_chat(&mut request(), c, now, ttl, true, None),
+            Some("say_team \"Group up at our base entrance.\"".into())
+        );
+        assert!(take_chat(
+            &mut request(),
+            Context { map_epoch: 1, ..c },
+            now,
+            ttl,
+            true,
+            None
+        )
+        .is_none());
+        assert!(take_chat(
+            &mut request(),
+            c,
+            now + Duration::from_secs(1),
+            ttl,
+            true,
+            None
+        )
+        .is_none());
+        assert!(take_chat(&mut request(), c, now, ttl, false, None).is_none());
+        let mut queued = request();
+        let last = Some(now - Duration::from_millis(4900));
+        assert!(take_chat(&mut queued, c, now, ttl, true, last).is_none());
+        assert!(queued.is_some());
+        assert!(take_chat(
+            &mut queued,
+            c,
+            now + Duration::from_millis(100),
+            ttl,
+            true,
+            last
+        )
+        .is_some());
+    }
     #[test]
     fn midmatch_join_uses_visible_menu_and_respects_locked_matches() {
         let mut o = Observation::default();
@@ -726,6 +867,9 @@ mod tests {
                     observation: processed,
                     input: None,
                     ready_request: None,
+                    chat: None,
+                    chat_at: None,
+                    chat_sent: None,
                     closed: false,
                     error: None,
                 }),
@@ -742,6 +886,25 @@ mod tests {
         let first = client.observation();
         assert!(first.ready && first.entities.is_empty());
         assert_eq!(first.ctf_match_status, "SETUP: 10 not ready");
+        assert!(client
+            .say_team(&first, "Group up at our base entrance.")
+            .unwrap());
+        for _ in 0..100 {
+            assert!(!client.say_team(&first, "I'm coming.").unwrap());
+        }
+        {
+            let mut s = client.shared.state.lock().unwrap();
+            s.chat = None;
+        }
+        assert!(
+            !client.say_team(&first, "I'm coming.").unwrap(),
+            "draining the queue does not bypass cooldown"
+        );
+        {
+            let mut s = client.shared.state.lock().unwrap();
+            s.chat_at = Some(Instant::now() - CHAT_INTERVAL);
+        }
+        assert!(client.say_team(&first, "I'm coming.").unwrap());
         client.ready_up(&first).unwrap();
         client.join_team(&first, Team::Blue).unwrap();
         assert_eq!(

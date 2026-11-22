@@ -161,3 +161,18 @@ ordinary visible join menu instead: it opens the menu, advances its cursor, or
 selects the requested team according to the latest delayed layout observation.
 Call again after a fresh menu observation until assigned. It never selects a
 menu marked `MATCH IS LOCKED`; server entry restrictions remain authoritative.
+
+### Rate-limited team chat
+
+`client.say_team(&observation, "I'm going for the flag.")?` queues an ordinary
+`say_team` message. `true` means accepted into the single pending slot, not server
+acknowledgement; `false` means busy or cooling down. Admission and actual sends
+are limited to one message per five seconds per client. Messages expire with
+`action_timeout`, cannot cross map/reconnect contexts, and never delay movement
+or ready/menu commands. Received text remains ordinary delayed `Event::Message`.
+
+Text is limited to 160 printable ASCII bytes. Empty/whitespace-only text, control
+characters, quotes, backslashes, semicolons, and percent macros are rejected;
+there is no console injection or implicit CTF location/inventory expansion.
+No chat is sent unless the caller explicitly uses the API. Human capability
+profiles are unchanged.
