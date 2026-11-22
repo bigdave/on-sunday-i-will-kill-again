@@ -23,6 +23,7 @@ struct Input {
     action: Action,
 }
 struct ReadyRequest {
+    menu: Option<&'static str>,
     team: Option<Team>,
     context: Context,
     at: Instant,
@@ -157,15 +158,31 @@ impl Client {
     /// Repeated requests coalesce; the worker sends at most once every two seconds.
     /// Pending requests expire after action_timeout and never cross map/reconnect contexts.
     pub fn ready_up(&self, observation: &Observation) -> Result<(), Error> {
-        self.player_command(observation, None)
+        self.player_command(observation, None, None)
     }
     /// Queue the ordinary classic CTF `team red` or `team blue` command.
     /// Useful when competition resets players to spectators after a round.
     /// Uses the same bounded, expiring, two-second-rate-limited queue as ready_up.
     pub fn join_team(&self, observation: &Observation, team: Team) -> Result<(), Error> {
-        self.player_command(observation, Some(team))
+        let menu = if observation.player.pm_type == 1
+            && (observation.ctf_match_status.contains(" MATCH")
+                || observation.ctf_match_status.contains("UNTIL START"))
+        {
+            let Some(command) = menu_team_command(observation, team) else {
+                return Ok(());
+            };
+            Some(command)
+        } else {
+            None
+        };
+        self.player_command(observation, Some(team), menu)
     }
-    fn player_command(&self, observation: &Observation, team: Option<Team>) -> Result<(), Error> {
+    fn player_command(
+        &self,
+        observation: &Observation,
+        team: Option<Team>,
+        menu: Option<&'static str>,
+    ) -> Result<(), Error> {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.closed {
             return Err(state.error.clone().unwrap_or(Error::Closed));
@@ -177,6 +194,7 @@ impl Client {
             return Err(Error::StaleObservation);
         }
         state.ready_request = Some(ReadyRequest {
+            menu,
             team,
             context: observation.context,
             at: Instant::now(),
@@ -193,6 +211,37 @@ impl Client {
 impl Drop for Client {
     fn drop(&mut self) {
         self.close();
+    }
+}
+fn menu_team_command(o: &Observation, team: Team) -> Option<&'static str> {
+    let layout = o
+        .events
+        .iter()
+        .rev()
+        .filter(|r| r.map_epoch == o.context.map_epoch)
+        .find_map(|r| {
+            if let Event::Layout { text } = &r.event {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        });
+    let Some(layout) = layout else {
+        return Some("inven");
+    };
+    if layout.contains("MATCH IS LOCKED") {
+        return None;
+    }
+    let label = match team {
+        Team::Red => "Join Red MATCH Team",
+        Team::Blue => "Join Blue MATCH Team",
+    };
+    if layout.contains(&format!("string2 \"\r{label}\"")) {
+        Some("invuse")
+    } else if layout.contains(label) {
+        Some("invnext")
+    } else {
+        Some("inven")
     }
 }
 fn take_ready_request(
@@ -497,6 +546,7 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                 {
                     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
                     let team = state.ready_request.as_ref().and_then(|r| r.team);
+                    let menu = state.ready_request.as_ref().and_then(|r| r.menu);
                     if take_ready_request(
                         &mut state.ready_request,
                         context,
@@ -505,10 +555,10 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                         cfg.action_timeout,
                         fresh,
                     ) {
-                        ch.command(
+                        ch.command(menu.map(str::to_string).unwrap_or_else(|| {
                             team.map(|t| format!("team {}", t.as_str()))
-                                .unwrap_or_else(|| "ready".into()),
-                        );
+                                .unwrap_or_else(|| "ready".into())
+                        }));
                         ready_at = now;
                     }
                 }
@@ -558,11 +608,31 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
 mod tests {
     use super::*;
     #[test]
+    fn midmatch_join_uses_visible_menu_and_respects_locked_matches() {
+        let mut o = Observation::default();
+        assert_eq!(menu_team_command(&o, Team::Blue), Some("inven"));
+        let layout = |text: &str| EventRecord {
+            id: 1,
+            map_epoch: 0,
+            event: Event::Layout { text: text.into() },
+        };
+        o.events = vec![layout(
+            "string2 \"\rJoin Red MATCH Team\" string \"Join Blue MATCH Team\"",
+        )];
+        assert_eq!(menu_team_command(&o, Team::Blue), Some("invnext"));
+        assert_eq!(menu_team_command(&o, Team::Red), Some("invuse"));
+        o.events = vec![layout("string2 \"\rJoin Blue MATCH Team\"")];
+        assert_eq!(menu_team_command(&o, Team::Blue), Some("invuse"));
+        o.events = vec![layout("MATCH IS LOCKED")];
+        assert_eq!(menu_team_command(&o, Team::Blue), None);
+    }
+    #[test]
     fn readiness_is_bounded_expires_and_cannot_cross_contexts() {
         let now = Instant::now();
         let context = Context::default();
         let ttl = Duration::from_millis(250);
         let mut request = Some(ReadyRequest {
+            menu: None,
             team: None,
             context,
             at: now,
@@ -586,6 +656,7 @@ mod tests {
         ));
         assert!(request.is_none());
         request = Some(ReadyRequest {
+            menu: None,
             team: None,
             context,
             at: now,
@@ -610,6 +681,7 @@ mod tests {
             },
         ] {
             request = Some(ReadyRequest {
+                menu: None,
                 team: None,
                 context,
                 at: now,

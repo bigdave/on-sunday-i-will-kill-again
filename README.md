@@ -155,3 +155,9 @@ command (or `Team::Red` for red). It shares the bounded command slot and rate
 limit with `ready_up`; the latest request wins. This lets a caller rejoin when
 competition returns players to spectators between rounds. There is no automatic
 team change: the caller explicitly requests it using a fresh observation.
+
+For a spectator during an active match or countdown, `join_team` follows the
+ordinary visible join menu instead: it opens the menu, advances its cursor, or
+selects the requested team according to the latest delayed layout observation.
+Call again after a fresh menu observation until assigned. It never selects a
+menu marked `MATCH IS LOCKED`; server entry restrictions remain authoritative.
