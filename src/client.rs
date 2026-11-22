@@ -23,6 +23,7 @@ struct Input {
     action: Action,
 }
 struct ReadyRequest {
+    team: Option<Team>,
     context: Context,
     at: Instant,
 }
@@ -156,6 +157,15 @@ impl Client {
     /// Repeated requests coalesce; the worker sends at most once every two seconds.
     /// Pending requests expire after action_timeout and never cross map/reconnect contexts.
     pub fn ready_up(&self, observation: &Observation) -> Result<(), Error> {
+        self.player_command(observation, None)
+    }
+    /// Queue the ordinary classic CTF `team red` or `team blue` command.
+    /// Useful when competition resets players to spectators after a round.
+    /// Uses the same bounded, expiring, two-second-rate-limited queue as ready_up.
+    pub fn join_team(&self, observation: &Observation, team: Team) -> Result<(), Error> {
+        self.player_command(observation, Some(team))
+    }
+    fn player_command(&self, observation: &Observation, team: Option<Team>) -> Result<(), Error> {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.closed {
             return Err(state.error.clone().unwrap_or(Error::Closed));
@@ -167,6 +177,7 @@ impl Client {
             return Err(Error::StaleObservation);
         }
         state.ready_request = Some(ReadyRequest {
+            team,
             context: observation.context,
             at: Instant::now(),
         });
@@ -485,6 +496,7 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                 };
                 {
                     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                    let team = state.ready_request.as_ref().and_then(|r| r.team);
                     if take_ready_request(
                         &mut state.ready_request,
                         context,
@@ -493,7 +505,10 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                         cfg.action_timeout,
                         fresh,
                     ) {
-                        ch.command("ready".into());
+                        ch.command(
+                            team.map(|t| format!("team {}", t.as_str()))
+                                .unwrap_or_else(|| "ready".into()),
+                        );
                         ready_at = now;
                     }
                 }
@@ -547,7 +562,11 @@ mod tests {
         let now = Instant::now();
         let context = Context::default();
         let ttl = Duration::from_millis(250);
-        let mut request = Some(ReadyRequest { context, at: now });
+        let mut request = Some(ReadyRequest {
+            team: None,
+            context,
+            at: now,
+        });
         assert!(!take_ready_request(
             &mut request,
             context,
@@ -566,7 +585,11 @@ mod tests {
             true
         ));
         assert!(request.is_none());
-        request = Some(ReadyRequest { context, at: now });
+        request = Some(ReadyRequest {
+            team: None,
+            context,
+            at: now,
+        });
         assert!(!take_ready_request(
             &mut request,
             context,
@@ -586,7 +609,11 @@ mod tests {
                 ..context
             },
         ] {
-            request = Some(ReadyRequest { context, at: now });
+            request = Some(ReadyRequest {
+                team: None,
+                context,
+                at: now,
+            });
             assert!(!take_ready_request(
                 &mut request,
                 changed,
@@ -644,9 +671,26 @@ mod tests {
         assert!(first.ready && first.entities.is_empty());
         assert_eq!(first.ctf_match_status, "SETUP: 10 not ready");
         client.ready_up(&first).unwrap();
+        client.join_team(&first, Team::Blue).unwrap();
+        assert_eq!(
+            client
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .ready_request
+                .as_ref()
+                .unwrap()
+                .team,
+            Some(Team::Blue)
+        );
         let mut stale = first.clone();
         stale.context.map_epoch += 1;
         assert_eq!(client.ready_up(&stale), Err(Error::StaleObservation));
+        assert_eq!(
+            client.join_team(&stale, Team::Red),
+            Err(Error::StaleObservation)
+        );
         assert_eq!(
             format!("{first:?}"),
             format!(

@@ -149,3 +149,9 @@ player may ready up. `human_limitations_v1` is unchanged.
 
 Version 0.3.0 adds a public observation field; users constructing complete
 `Observation` literals should add the field or use `..Default::default()`.
+
+`client.join_team(&observation, Team::Blue)?` queues the ordinary `team blue`
+command (or `Team::Red` for red). It shares the bounded command slot and rate
+limit with `ready_up`; the latest request wins. This lets a caller rejoin when
+competition returns players to spectators between rounds. There is no automatic
+team change: the caller explicitly requests it using a fresh observation.
