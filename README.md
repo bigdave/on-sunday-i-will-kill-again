@@ -70,6 +70,11 @@ follow the delayed publication. `Observation.frame` and `snapshot_age` describe
 that delayed world snapshot.
 
 `HumanLimitationsV3` uses the V2 rules with a 100 ms world-perception delay.
+Spatial sound events with a known origin also carry a coarse `SoundPan`
+(`Left`, `Center`, or `Right`) relative to the listener's view when the cue
+was first observed. As with ordinary stereo panning, a centered sound may be
+in front of or behind the listener. Sounds outside the visual field of view
+can still provide a stereo cue.
 
 Available starting in **v0.2.0**. Use the release tag:
 
@@ -102,7 +107,7 @@ Both `observation()` and `wait_for_update()` expose only processed publications.
 
 With the profile enabled, `Action.view` is a desired orientation. Movement supplied with that orientation is rotated into the limited camera's axes to preserve the intended world travel direction, subject to normal input clamps. Attack is still the bot's decision and fires along the actual limited view, not the requested target. `view=None` brakes angular motion. Expired input immediately releases movement and attack while angular motion brakes. There is no extra action delay on top of the observation delay.
 
-Sound events retain sound identity and volume but remove exact source position, entity and channel; out-of-view muzzle flashes and opaque temporary-effect payloads are removed. Public roster/config strings, text and scoreboard layouts are retained but delayed.
+Sound events retain sound identity and volume but remove exact source position, entity and channel. V3 also supplies the stereo cue described above. Out-of-view muzzle flashes and opaque temporary-effect payloads are removed. Public roster/config strings, text and scoreboard layouts are retained but delayed.
 
 **FOV is not wall occlusion.** The crate still has no map geometry: in-frustum network entities can be behind walls. Bots must supply geometry checks separately, and this profile does not model partial visibility, directional hearing or a human's complete perception. This is an opt-in convention, not enforcement against modified clients. New balancing parameters should use a new profile version rather than silently changing v1.
 

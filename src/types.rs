@@ -13,7 +13,7 @@ pub enum PlayerCapabilities {
     HumanLimitationsV1,
     /// V1 perception and camera limits with current local movement and view state.
     HumanLimitationsV2,
-    /// V2 with a 100 ms world-perception delay.
+    /// V2 with a 100 ms world-perception delay and stereo sound cues.
     HumanLimitationsV3,
 }
 impl PlayerCapabilities {
@@ -231,6 +231,15 @@ pub struct CtfHud {
     pub red_captures: i16,
     pub blue_captures: i16,
 }
+/// Coarse stereo position relative to the listener when the sound was heard.
+/// A centered sound can be in front of or behind the listener.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoundPan {
+    Left,
+    Center,
+    Right,
+}
+
 #[derive(Clone, Debug)]
 pub enum Event {
     Message {
@@ -251,6 +260,8 @@ pub enum Event {
         entity: Option<u16>,
         channel: Option<u8>,
         position: Option<[f32; 3]>,
+        /// V3's stereo cue when the server supplied a usable sound origin.
+        pan: Option<SoundPan>,
     },
     MapChanged {
         map: String,

@@ -1,7 +1,9 @@
 //! Worker-owned capability state: neither repeated reads nor submissions advance it.
-use crate::{Action, Context, Event, Observation, PlayerCapabilities, PlayerState, ViewAngles};
+use crate::{
+    Action, Context, Event, Observation, PlayerCapabilities, PlayerState, SoundPan, ViewAngles,
+};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     time::{Duration, Instant},
 };
 
@@ -15,6 +17,7 @@ pub(crate) struct Capabilities {
     profile: Option<PlayerCapabilities>,
     context: Option<Context>,
     pending: VecDeque<(Instant, Observation)>,
+    sound_pans: BTreeMap<u64, Option<SoundPan>>,
     view: Option<ViewAngles>,
     velocity: [f32; 2],
     delta: Option<[i16; 3]>,
@@ -36,6 +39,7 @@ impl Capabilities {
             profile,
             context: None,
             pending: VecDeque::new(),
+            sound_pans: BTreeMap::new(),
             view: None,
             velocity: [0.; 2],
             delta: None,
@@ -46,6 +50,7 @@ impl Capabilities {
         if self.context != Some(context) {
             self.context = Some(context);
             self.pending.clear();
+            self.sound_pans.clear();
             self.view = None;
             self.velocity = [0.; 2];
             self.delta = None;
@@ -144,7 +149,9 @@ impl Capabilities {
             PlayerCapabilities::HumanLimitationsV2 | PlayerCapabilities::HumanLimitationsV3
         )
         .then(|| raw.player.clone());
-        filter(&mut raw);
+        let sound_pans =
+            (profile == PlayerCapabilities::HumanLimitationsV3).then_some(&mut self.sound_pans);
+        filter(&mut raw, sound_pans);
         self.pending.push_back((now, raw));
         while self.pending.len() > 8 {
             self.pending.pop_front();
@@ -184,16 +191,65 @@ impl Capabilities {
         }
     }
 }
-fn filter(o: &mut Observation) {
+fn stereo_pan(source: [f32; 3], eye: [f32; 3], right: [f32; 3]) -> SoundPan {
+    let delta = std::array::from_fn::<_, 3, _>(|i| source[i] - eye[i]);
+    let distance = delta[0].hypot(delta[1]).hypot(delta[2]);
+    let lateral = (0..3).map(|i| delta[i] * right[i]).sum::<f32>();
+    if lateral > 0.25 * distance {
+        SoundPan::Right
+    } else if lateral < -0.25 * distance {
+        SoundPan::Left
+    } else {
+        SoundPan::Center
+    }
+}
+
+fn filter(o: &mut Observation, mut sound_pans: Option<&mut BTreeMap<u64, Option<SoundPan>>>) {
     let eye = std::array::from_fn::<_, 3, _>(|i| o.player.origin[i] + o.player.view_offset[i]);
     let view = player_view(&o.player);
     let (sy, cy) = view.yaw.to_radians().sin_cos();
     let (sp, cp) = view.pitch.to_radians().sin_cos();
     let forward = [cp * cy, cp * sy, -sp];
-    let right = [-sy, cy, 0.];
+    let right = [sy, -cy, 0.];
     let up = [sp * cy, sp * sy, cp];
+    let own_entity = o.slot.map(|slot| slot + 1);
+    if let Some(history) = sound_pans.as_deref_mut() {
+        history.retain(|id, _| o.events.first().is_some_and(|oldest| *id >= oldest.id));
+    }
+    // Resolve sounds from the server snapshot before applying visual FOV.
+    // An event appears in multiple snapshots, so keep its original stereo cue.
+    for record in &mut o.events {
+        if let Event::Sound {
+            volume,
+            attenuation,
+            entity,
+            position,
+            channel,
+            pan,
+            ..
+        } = &mut record.event
+        {
+            *pan = sound_pans.as_deref_mut().and_then(|history| {
+                *history.entry(record.id).or_insert_with(|| {
+                    if *volume == 0.
+                        || *attenuation == 0.
+                        || entity.is_some_and(|id| Some(usize::from(id)) == own_entity)
+                    {
+                        return None;
+                    }
+                    let source = position.or_else(|| {
+                        entity.and_then(|id| o.entities.get(&id).map(|state| state.origin))
+                    })?;
+                    Some(stereo_pan(source, eye, right))
+                })
+            });
+            *entity = None;
+            *position = None;
+            *channel = None;
+        }
+    }
     o.entities.retain(|id, e| {
-        if Some(*id as usize) == o.slot.map(|s| s + 1) {
+        if Some(usize::from(*id)) == own_entity {
             return true;
         }
         let d = std::array::from_fn::<_, 3, _>(|i| e.origin[i] - eye[i]);
@@ -203,18 +259,7 @@ fn filter(o: &mut Observation) {
             && dot(right).abs() <= depth * 55f32.to_radians().tan()
             && dot(up).abs() <= depth * 40f32.to_radians().tan()
     });
-    o.events.retain_mut(|r| match &mut r.event {
-        Event::Sound {
-            entity,
-            position,
-            channel,
-            ..
-        } => {
-            *entity = None;
-            *position = None;
-            *channel = None;
-            true
-        }
+    o.events.retain(|r| match &r.event {
         Event::MuzzleFlash { entity, .. } => o.entities.contains_key(entity),
         // Uninterpreted effect payloads can contain hidden world coordinates.
         Event::TemporaryEntity { .. } => false,
@@ -453,6 +498,7 @@ mod tests {
                     entity: Some(3),
                     channel: Some(1),
                     position: Some([-100., 0., 0.]),
+                    pan: None,
                 },
             },
             EventRecord {
@@ -481,7 +527,7 @@ mod tests {
                 },
             },
         ];
-        filter(&mut o);
+        filter(&mut o, None);
         assert_eq!(o.entities.keys().copied().collect::<Vec<_>>(), vec![1, 2]);
         assert_eq!(o.events.len(), 2);
         assert!(matches!(
@@ -490,6 +536,7 @@ mod tests {
                 entity: None,
                 position: None,
                 channel: None,
+                pan: None,
                 ..
             }
         ));
@@ -501,9 +548,75 @@ mod tests {
                 ..Default::default()
             },
         );
-        filter(&mut o);
+        filter(&mut o, None);
         assert!(o.entities.contains_key(&3));
         assert!(!o.entities.contains_key(&2));
+    }
+
+    #[test]
+    fn v3_delivers_stereo_sound_from_outside_fov_without_source_metadata() {
+        let mut c = Capabilities::new(Some(PlayerCapabilities::human_limitations_v3()));
+        let now = Instant::now();
+        let mut world = snapshot(1);
+        world.entities.insert(
+            2,
+            EntityState {
+                origin: [-100., 100., 0.],
+                ..Default::default()
+            },
+        );
+        for (id, entity, position) in [
+            (1, Some(2), None),
+            (2, None, Some([-100., -100., 0.])),
+            (3, None, Some([-100., 0., 0.])),
+            (4, None, None),
+        ] {
+            world.events.push(EventRecord {
+                id,
+                map_epoch: 0,
+                event: Event::Sound {
+                    index: 2,
+                    volume: 1.,
+                    attenuation: 1.,
+                    offset: 0.,
+                    entity,
+                    channel: Some(1),
+                    position,
+                    pan: None,
+                },
+            });
+        }
+        let cues = |o: Observation| {
+            o.events
+                .into_iter()
+                .map(|event| match event.event {
+                    Event::Sound {
+                        entity,
+                        position,
+                        channel,
+                        pan,
+                        ..
+                    } => {
+                        assert_eq!((entity, position, channel), (None, None, None));
+                        pan
+                    }
+                    event => panic!("expected sound, got {event:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(c.observation(world.clone(), now).events.is_empty());
+        let delayed = c.observation(world.clone(), now + V3_DELAY);
+        assert!(delayed.entities.is_empty());
+        let expected = [
+            Some(SoundPan::Left),
+            Some(SoundPan::Right),
+            Some(SoundPan::Center),
+            None,
+        ];
+        assert_eq!(cues(delayed), expected);
+        world.player.view_angles[1] = 32768;
+        c.observation(world.clone(), now + V3_DELAY * 2);
+        assert_eq!(cues(c.observation(world, now + V3_DELAY * 3)), expected);
     }
     #[test]
     fn turning_is_bounded_across_wraparound_reversals_and_release() {

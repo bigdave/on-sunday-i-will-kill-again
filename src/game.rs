@@ -211,6 +211,7 @@ impl Game {
                         entity: channel.map(|c| c >> 3),
                         channel: channel.map(|c| (c & 7) as u8),
                         position,
+                        pan: None,
                     });
                 }
                 10 => {
