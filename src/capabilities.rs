@@ -11,7 +11,7 @@ const SPEED: f32 = 360.;
 const ACCEL: f32 = 1440.;
 
 pub(crate) struct Capabilities {
-    enabled: bool,
+    profile: Option<PlayerCapabilities>,
     context: Option<Context>,
     pending: VecDeque<(Instant, Observation)>,
     view: Option<ViewAngles>,
@@ -32,7 +32,7 @@ fn player_view(p: &PlayerState) -> ViewAngles {
 impl Capabilities {
     pub(crate) fn new(profile: Option<PlayerCapabilities>) -> Self {
         Self {
-            enabled: profile.is_some(),
+            profile,
             context: None,
             pending: VecDeque::new(),
             view: None,
@@ -56,7 +56,7 @@ impl Capabilities {
         p: &PlayerState,
         context: Context,
     ) -> Action {
-        if !self.enabled {
+        if self.profile.is_none() {
             return action;
         }
         self.reset_context(context);
@@ -110,7 +110,7 @@ impl Capabilities {
         action
     }
     pub(crate) fn observation(&mut self, mut raw: Observation, now: Instant) -> Observation {
-        if !self.enabled {
+        if self.profile.is_none() {
             return raw;
         }
         self.reset_context(raw.context);
@@ -132,6 +132,8 @@ impl Capabilities {
             raw.player.view_angles = [view.pitch, view.yaw, view.roll]
                 .map(|v| (v.rem_euclid(360.) * 65536. / 360.) as u16);
         }
+        let current_player = (self.profile == Some(PlayerCapabilities::HumanLimitationsV2))
+            .then(|| raw.player.clone());
         filter(&mut raw);
         self.pending.push_back((now, raw));
         while self.pending.len() > 8 {
@@ -149,6 +151,17 @@ impl Capabilities {
         if let Some((at, mut observation)) = delivered {
             let age = now.duration_since(at);
             observation.sequence = sequence;
+            if let Some(current) = current_player {
+                let player = &mut observation.player;
+                player.origin = current.origin;
+                player.velocity = current.velocity;
+                player.view_angles = current.view_angles;
+                player.view_offset = current.view_offset;
+                player.delta_angles = current.delta_angles;
+                player.pm_type = current.pm_type;
+                player.pm_flags = current.pm_flags;
+                player.gravity = current.gravity;
+            }
             if let Some(a) = &mut observation.snapshot_age {
                 *a += age;
             }
@@ -282,6 +295,74 @@ mod tests {
         let got = c.observation(snapshot(4), start + DELAY);
         assert!(got.ready);
         assert_eq!(got.frame, 0);
+    }
+    #[test]
+    fn v2_refreshes_local_motion_but_delays_filtered_world_and_events() {
+        let start = Instant::now();
+        let mut c = Capabilities::new(Some(PlayerCapabilities::human_limitations_v2()));
+        let mut old = snapshot(10);
+        old.slot = Some(0);
+        old.player.origin = [10., 0., 0.];
+        old.inventory = Some(Inventory {
+            counts: [0; 256],
+            age: Duration::ZERO,
+            updates: 1,
+        });
+        old.entities.insert(
+            2,
+            EntityState {
+                origin: [110., 0., 0.],
+                ..Default::default()
+            },
+        );
+        old.entities.insert(
+            3,
+            EntityState {
+                origin: [-100., 0., 0.],
+                ..Default::default()
+            },
+        );
+        old.events.push(EventRecord {
+            id: 1,
+            map_epoch: 0,
+            event: Event::Message {
+                level: 1,
+                text: "old".into(),
+            },
+        });
+        let mut fresh = old.clone();
+        fresh.sequence = 12;
+        fresh.frame = 12;
+        fresh.player.origin = [40., 0., -8.];
+        fresh.player.velocity = [250., 0., -60.];
+        fresh.player.view_angles[1] = 4000;
+        fresh.player.pm_flags = 16;
+        fresh.player.stats[1] = 80;
+        fresh.entities.get_mut(&2).unwrap().origin = [140., 0., 0.];
+        fresh.events.push(EventRecord {
+            id: 2,
+            map_epoch: 0,
+            event: Event::Message {
+                level: 1,
+                text: "fresh".into(),
+            },
+        });
+        fresh.inventory.as_mut().unwrap().updates = 2;
+        assert!(!c.observation(old, start).ready);
+        let got = c.observation(fresh, start + DELAY);
+        assert!(got.ready);
+        assert_eq!(got.frame, 10);
+        assert_eq!(got.sequence, 12);
+        assert_eq!(got.player.origin, [40., 0., -8.]);
+        assert_eq!(got.player.velocity, [250., 0., -60.]);
+        assert_eq!(got.player.view_angles[1], 4000);
+        assert_eq!(got.player.pm_flags, 16);
+        assert_eq!(got.health(), 100);
+        assert_eq!(got.entities[&2].origin, [110., 0., 0.]);
+        assert!(!got.entities.contains_key(&3));
+        assert_eq!(got.events.len(), 1);
+        assert_eq!(got.events[0].id, 1);
+        assert_eq!(got.inventory.unwrap().updates, 1);
     }
     #[test]
     fn map_reconnect_and_stale_snapshot_flush_pending_information() {

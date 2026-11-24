@@ -63,6 +63,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Optional human limitations
 
+`HumanLimitationsV2` uses the same view, turning, and 200 ms world-perception
+limits as V1. It refreshes the local player's movement and camera state from the
+latest server snapshot. Entities, events, HUD, weapons, and inventory still
+follow the delayed publication. `Observation.frame` and `snapshot_age` describe
+that delayed world snapshot.
+
 Available starting in **v0.2.0**. Use the release tag:
 
 ```toml

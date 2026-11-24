@@ -11,10 +11,16 @@ pub enum PlayerCapabilities {
     /// 200 ms observation delay, 110 x 80 degree FOV, 360 deg/s turning,
     /// 1440 deg/s² angular acceleration, and 20 Hz inputs.
     HumanLimitationsV1,
+    /// V1 perception and camera limits with current local movement and view state.
+    HumanLimitationsV2,
 }
 impl PlayerCapabilities {
     pub const fn human_limitations_v1() -> Self {
         Self::HumanLimitationsV1
+    }
+
+    pub const fn human_limitations_v2() -> Self {
+        Self::HumanLimitationsV2
     }
 }
 
@@ -278,6 +284,8 @@ pub struct Observation {
     pub ctf_match_status: String,
     pub map: String,
     pub slot: Option<usize>,
+    /// Local player state. HumanLimitationsV2 refreshes movement and view
+    /// fields from the latest snapshot while HUD and weapon fields stay delayed.
     pub player: PlayerState,
     /// Network snapshot entities; the optional capability profile applies FOV filtering.
     /// Neither mode provides map-geometry occlusion. See docs.
