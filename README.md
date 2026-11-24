@@ -69,6 +69,8 @@ latest server snapshot. Entities, events, HUD, weapons, and inventory still
 follow the delayed publication. `Observation.frame` and `snapshot_age` describe
 that delayed world snapshot.
 
+`HumanLimitationsV3` uses the V2 rules with a 100 ms world-perception delay.
+
 Available starting in **v0.2.0**. Use the release tag:
 
 ```toml

@@ -13,6 +13,8 @@ pub enum PlayerCapabilities {
     HumanLimitationsV1,
     /// V1 perception and camera limits with current local movement and view state.
     HumanLimitationsV2,
+    /// V2 with a 100 ms world-perception delay.
+    HumanLimitationsV3,
 }
 impl PlayerCapabilities {
     pub const fn human_limitations_v1() -> Self {
@@ -21,6 +23,10 @@ impl PlayerCapabilities {
 
     pub const fn human_limitations_v2() -> Self {
         Self::HumanLimitationsV2
+    }
+
+    pub const fn human_limitations_v3() -> Self {
+        Self::HumanLimitationsV3
     }
 }
 
@@ -284,7 +290,7 @@ pub struct Observation {
     pub ctf_match_status: String,
     pub map: String,
     pub slot: Option<usize>,
-    /// Local player state. HumanLimitationsV2 refreshes movement and view
+    /// Local player state. HumanLimitationsV2 and V3 refresh movement and view
     /// fields from the latest snapshot while HUD and weapon fields stay delayed.
     pub player: PlayerState,
     /// Network snapshot entities; the optional capability profile applies FOV filtering.

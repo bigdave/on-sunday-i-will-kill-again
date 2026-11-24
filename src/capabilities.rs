@@ -6,6 +6,7 @@ use std::{
 };
 
 const DELAY: Duration = Duration::from_millis(200);
+const V3_DELAY: Duration = Duration::from_millis(100);
 const DT: f32 = 0.05;
 const SPEED: f32 = 360.;
 const ACCEL: f32 = 1440.;
@@ -110,9 +111,15 @@ impl Capabilities {
         action
     }
     pub(crate) fn observation(&mut self, mut raw: Observation, now: Instant) -> Observation {
-        if self.profile.is_none() {
+        let Some(profile) = self.profile else {
             return raw;
-        }
+        };
+        let delay = match profile {
+            PlayerCapabilities::HumanLimitationsV1 | PlayerCapabilities::HumanLimitationsV2 => {
+                DELAY
+            }
+            PlayerCapabilities::HumanLimitationsV3 => V3_DELAY,
+        };
         self.reset_context(raw.context);
         let sequence = raw.sequence;
         let neutral = Observation {
@@ -132,8 +139,11 @@ impl Capabilities {
             raw.player.view_angles = [view.pitch, view.yaw, view.roll]
                 .map(|v| (v.rem_euclid(360.) * 65536. / 360.) as u16);
         }
-        let current_player = (self.profile == Some(PlayerCapabilities::HumanLimitationsV2))
-            .then(|| raw.player.clone());
+        let current_player = matches!(
+            profile,
+            PlayerCapabilities::HumanLimitationsV2 | PlayerCapabilities::HumanLimitationsV3
+        )
+        .then(|| raw.player.clone());
         filter(&mut raw);
         self.pending.push_back((now, raw));
         while self.pending.len() > 8 {
@@ -143,7 +153,7 @@ impl Capabilities {
         while self
             .pending
             .front()
-            .map(|(t, _)| now.duration_since(*t) >= DELAY)
+            .map(|(t, _)| now.duration_since(*t) >= delay)
             .unwrap_or(false)
         {
             delivered = self.pending.pop_front();
@@ -363,6 +373,33 @@ mod tests {
         assert_eq!(got.events.len(), 1);
         assert_eq!(got.events[0].id, 1);
         assert_eq!(got.inventory.unwrap().updates, 1);
+    }
+    #[test]
+    fn v3_publishes_world_at_100_ms_with_fresh_local_motion() {
+        let mut c = Capabilities::new(Some(PlayerCapabilities::human_limitations_v3()));
+        let start = Instant::now();
+        let mut old = snapshot(10);
+        old.events.push(EventRecord {
+            id: 1,
+            map_epoch: 0,
+            event: Event::Message {
+                level: 1,
+                text: "delayed".into(),
+            },
+        });
+        assert!(!c.observation(old, start).ready);
+        let early = c.observation(snapshot(11), start + Duration::from_millis(99));
+        assert!(!early.ready);
+        assert!(early.events.is_empty());
+        let mut fresh = snapshot(12);
+        fresh.player.origin = [32., 0., 0.];
+        let got = c.observation(fresh, start + Duration::from_millis(100));
+        assert!(got.ready);
+        assert_eq!(got.frame, 10);
+        assert_eq!(got.player.origin, [32., 0., 0.]);
+        assert_eq!(got.snapshot_age, Some(Duration::from_millis(110)));
+        assert_eq!(got.events.len(), 1);
+        assert_eq!(got.events[0].id, 1);
     }
     #[test]
     fn map_reconnect_and_stale_snapshot_flush_pending_information() {
