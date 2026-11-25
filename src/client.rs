@@ -3,7 +3,7 @@ use crate::{
     game::Game,
     types::*,
     wire::{self, Channel, UserCmd},
-    Error,
+    Error, PlayerState,
 };
 use std::{
     net::UdpSocket,
@@ -21,6 +21,7 @@ struct Input {
     sequence: u64,
     at: Instant,
     action: Action,
+    attack_tolerance: Option<f32>,
 }
 struct ReadyRequest {
     menu: Option<&'static str>,
@@ -149,6 +150,30 @@ impl Client {
     /// Submit timed movement/attack against the observation that informed it.
     /// Inputs replace rather than queue. They expire unless refreshed.
     pub fn submit(&self, observation: &Observation, action: Action) -> Result<(), Error> {
+        self.submit_input(observation, action, None)
+    }
+    /// Submit an action that may attack once the outgoing aim is within
+    /// `tolerance_degrees` of the requested view. The check runs on each input
+    /// tick after the turn limit. Actions without a view keep their attack behavior.
+    pub fn submit_with_aim_tolerance(
+        &self,
+        observation: &Observation,
+        action: Action,
+        tolerance_degrees: f32,
+    ) -> Result<(), Error> {
+        if !(0.0..=180.0).contains(&tolerance_degrees) {
+            return Err(Error::Configuration(
+                "aim tolerance must be between 0 and 180 degrees".into(),
+            ));
+        }
+        self.submit_input(observation, action, Some(tolerance_degrees))
+    }
+    fn submit_input(
+        &self,
+        observation: &Observation,
+        action: Action,
+        attack_tolerance: Option<f32>,
+    ) -> Result<(), Error> {
         action.validate()?;
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.closed {
@@ -162,6 +187,7 @@ impl Client {
             sequence: observation.sequence,
             at: Instant::now(),
             action,
+            attack_tolerance,
         });
         Ok(())
     }
@@ -487,6 +513,31 @@ fn movement(action: &Action, game: &Game) -> UserCmd {
         msec: 50,
     }
 }
+
+fn aim_within_tolerance(requested: ViewAngles, outgoing: ViewAngles, tolerance: f32) -> bool {
+    let pitch = requested.pitch.clamp(-89., 89.) - outgoing.pitch.clamp(-89., 89.);
+    let yaw = (requested.yaw.rem_euclid(360.) - outgoing.yaw.rem_euclid(360.) + 180.)
+        .rem_euclid(360.)
+        - 180.;
+    pitch.hypot(yaw) <= tolerance
+}
+
+fn apply_turn_limit(
+    limits: &mut Capabilities,
+    action: Action,
+    attack_tolerance: Option<f32>,
+    player: &PlayerState,
+    context: Context,
+) -> Action {
+    let requested_view = action.view;
+    let mut action = limits.action(action, player, context);
+    if let (true, Some(tolerance), Some(requested), Some(outgoing)) =
+        (action.attack, attack_tolerance, requested_view, action.view)
+    {
+        action.attack = aim_within_tolerance(requested, outgoing, tolerance);
+    }
+    action
+}
 fn inventory_due(game: &Game, interval: Option<Duration>, elapsed: Duration) -> bool {
     let Some(interval) = interval else {
         return false;
@@ -603,7 +654,7 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                         .last_snapshot
                         .map(|s| s.elapsed() <= cfg.snapshot_timeout)
                         .unwrap_or(false);
-                let action = {
+                let (action, attack_tolerance) = {
                     let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
                     state
                         .input
@@ -615,7 +666,7 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                                     <= cfg.action_timeout.as_millis() as u64
                                 && fresh
                         })
-                        .map(|i| i.action.clone())
+                        .map(|i| (i.action.clone(), i.attack_tolerance))
                         .unwrap_or_default()
                 };
                 {
@@ -649,7 +700,8 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
                         ready_at = now;
                     }
                 }
-                let action = limits.action(action, &game.player, context);
+                let action =
+                    apply_turn_limit(&mut limits, action, attack_tolerance, &game.player, context);
                 if fresh {
                     if inventory_due(&game, cfg.inventory_interval, inventory.elapsed()) {
                         ch.command("inven".into());
@@ -694,6 +746,51 @@ fn run(socket: UdpSocket, qport: u16, cfg: &Config, shared: &Shared, id: u64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aim_tolerance_uses_each_tick_of_the_limited_turn() {
+        let profile = Some(PlayerCapabilities::human_limitations_v4());
+        let mut limits = Capabilities::new(profile);
+        let mut game = Game::default();
+        game.player.stats[1] = 100;
+        let context = Context::default();
+        let attack = Action {
+            view: Some(ViewAngles {
+                yaw: 36.,
+                ..Default::default()
+            }),
+            forward: 100,
+            attack: true,
+            ..Default::default()
+        };
+        let first = apply_turn_limit(&mut limits, attack.clone(), Some(2.), &game.player, context);
+        let second = apply_turn_limit(&mut limits, attack.clone(), Some(2.), &game.player, context);
+        assert_eq!(first.view.unwrap().yaw, 18.);
+        assert_eq!(second.view.unwrap().yaw, 36.);
+        assert_eq!(movement(&first, &game).buttons, 0);
+        assert_eq!(movement(&second, &game).buttons, 129);
+        assert_eq!(first.forward, attack.forward);
+
+        let mut baseline = Capabilities::new(profile);
+        let first = apply_turn_limit(&mut baseline, attack, None, &game.player, context);
+        assert!(first.attack);
+        let respawn = Action {
+            attack: true,
+            ..Default::default()
+        };
+        assert!(apply_turn_limit(&mut baseline, respawn, Some(2.), &game.player, context).attack);
+        assert!(aim_within_tolerance(
+            ViewAngles {
+                yaw: 359.5,
+                ..Default::default()
+            },
+            ViewAngles {
+                yaw: 0.5,
+                ..Default::default()
+            },
+            2.,
+        ));
+    }
     #[test]
     fn team_chat_rejects_injection_and_discards_stale_messages() {
         for bad in ["", " ", "hello\nquit", "hello;quit", "\"", "\\", "%n", "é"] {

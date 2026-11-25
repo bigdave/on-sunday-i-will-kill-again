@@ -342,6 +342,8 @@ pub struct PlayerState {
     pub velocity: [f32; 3],
     pub delta_angles: [i16; 3],
     pub view_angles: [u16; 3],
+    /// Server-provided pitch, yaw, and roll offsets in degrees for the rendered camera.
+    pub kick_angles: [f32; 3],
     pub stats: [i16; 32],
     pub pm_type: u8,
     pub pm_flags: u8,
@@ -387,7 +389,9 @@ pub fn player(r: &mut Reader, p: &mut PlayerState) -> Result<()> {
         }
     }
     if b & 512 != 0 {
-        r.take(3)?;
+        for value in &mut p.kick_angles {
+            *value = f32::from(r.u8()? as i8) * 0.25;
+        }
     }
     if b & 4096 != 0 {
         p.gun_index = r.u8()? as u16;
@@ -443,6 +447,26 @@ pub fn temp_entity(r: &mut Reader) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn camera_kick_decodes_signed_degrees_and_persists_across_deltas() {
+        let mut p = PlayerState::default();
+        let mut bytes = 512u16.to_le_bytes().to_vec();
+        bytes.extend([(-9i8) as u8, 6, (-128i8) as u8]);
+        bytes.extend(2u32.to_le_bytes());
+        bytes.extend(75i16.to_le_bytes());
+        player(&mut Reader::new(&bytes), &mut p).unwrap();
+        assert_eq!(p.kick_angles, [-2.25, 1.5, -32.]);
+        assert_eq!(p.stats[1], 75);
+
+        player(&mut Reader::new(&[0; 6]), &mut p).unwrap();
+        assert_eq!(p.kick_angles, [-2.25, 1.5, -32.]);
+
+        let mut cleared = 512u16.to_le_bytes().to_vec();
+        cleared.extend([0; 7]);
+        player(&mut Reader::new(&cleared), &mut p).unwrap();
+        assert_eq!(p.kick_angles, [0.; 3]);
+    }
+
     #[test]
     fn gun_animation_frame_is_decoded_without_shifting_inventory_stats() {
         let mut p = PlayerState::default();

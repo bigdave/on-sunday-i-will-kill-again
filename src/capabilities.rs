@@ -74,6 +74,23 @@ impl Capabilities {
         self.delta = Some(p.delta_angles);
         self.alive = alive;
         let mut view = self.view.unwrap();
+        if self.profile == Some(PlayerCapabilities::HumanLimitationsV4) {
+            let max_step = SPEED * DT;
+            // Use the same pitch bounds as the ordinary command encoder.
+            view.pitch = view.pitch.clamp(-89., 89.);
+            if let Some(target) = action.view {
+                let pitch_error = target.pitch.clamp(-89., 89.) - view.pitch;
+                let yaw_error = wrap(wrap(target.yaw) - view.yaw);
+                view.pitch += pitch_error.clamp(-max_step, max_step);
+                view.yaw = wrap(view.yaw + yaw_error.clamp(-max_step, max_step));
+                view.roll = target.roll;
+            } else {
+                view.roll = f32::from(p.view_angles[2] as i16) * 360. / 65536.;
+            }
+            self.view = Some(view);
+            action.view = Some(view);
+            return action;
+        }
         {
             let target = action.view.unwrap_or(view);
             let error = [
@@ -124,6 +141,7 @@ impl Capabilities {
                 DELAY
             }
             PlayerCapabilities::HumanLimitationsV3 => V3_DELAY,
+            PlayerCapabilities::HumanLimitationsV4 => return raw,
         };
         self.reset_context(raw.context);
         let sequence = raw.sequence;
@@ -324,6 +342,105 @@ mod tests {
         let before = format!("{o:?}");
         assert_eq!(format!("{:?}", c.observation(o, Instant::now())), before);
     }
+
+    #[test]
+    fn v4_caps_pitch_and_yaw_independently_and_preserves_other_inputs() {
+        let mut c = Capabilities::new(Some(PlayerCapabilities::human_limitations_v4()));
+        let p = snapshot(1).player;
+        let context = Context::default();
+        let mut action = Action {
+            view: Some(ViewAngles {
+                pitch: 60.,
+                yaw: 90.,
+                roll: 45.,
+            }),
+            forward: 123,
+            side: -241,
+            up: 200,
+            attack: true,
+            use_weapon: Some("Railgun".into()),
+        };
+        let mut expected = action.clone();
+        expected.view.as_mut().unwrap().pitch = 18.;
+        expected.view.as_mut().unwrap().yaw = 18.;
+        assert_eq!(c.action(action.clone(), &p, context), expected);
+
+        action.view.as_mut().unwrap().pitch = -60.;
+        action.view.as_mut().unwrap().yaw = 90.;
+        let view = c.action(action, &p, context).view.unwrap();
+        assert_eq!((view.pitch, view.yaw), (0., 36.));
+
+        let view = c.action(Action::default(), &p, context).view.unwrap();
+        assert_eq!((view.pitch, view.yaw), (0., 36.));
+        let mut p = p;
+        p.delta_angles[1] = 16384;
+        p.view_angles[1] = 32768;
+        let view = c
+            .action(
+                Action {
+                    view: Some(ViewAngles {
+                        yaw: -175.,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                &p,
+                context,
+            )
+            .view
+            .unwrap();
+        assert_eq!(view.yaw, -175.);
+    }
+
+    #[test]
+    fn v4_publishes_the_decoded_observation_without_delay_or_filtering() {
+        let mut c = Capabilities::new(Some(PlayerCapabilities::human_limitations_v4()));
+        let mut o = snapshot(1);
+        o.player.kick_angles = [1., 2., 3.];
+        o.entities.insert(
+            2,
+            EntityState {
+                origin: [-100., 0., 0.],
+                ..Default::default()
+            },
+        );
+        o.events.push(EventRecord {
+            id: 1,
+            map_epoch: 0,
+            event: Event::Sound {
+                index: 2,
+                volume: 1.,
+                attenuation: 1.,
+                offset: 0.,
+                entity: Some(2),
+                channel: Some(3),
+                position: Some([-100., 0., 0.]),
+                pan: None,
+            },
+        });
+        o.events.push(EventRecord {
+            id: 2,
+            map_epoch: 0,
+            event: Event::TemporaryEntity {
+                kind: 1,
+                data: vec![1, 2, 3],
+            },
+        });
+        c.action(
+            Action {
+                view: Some(ViewAngles {
+                    yaw: 90.,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            &o.player,
+            o.context,
+        );
+        let before = format!("{o:?}");
+        assert_eq!(format!("{:?}", c.observation(o, Instant::now())), before);
+    }
+
     #[test]
     fn observations_wait_full_delay_and_keep_causal_contents() {
         let mut c = limited();
@@ -358,6 +475,7 @@ mod tests {
         let mut old = snapshot(10);
         old.slot = Some(0);
         old.player.origin = [10., 0., 0.];
+        old.player.kick_angles = [-2., 0., 1.];
         old.inventory = Some(Inventory {
             counts: [0; 256],
             age: Duration::ZERO,
@@ -391,6 +509,7 @@ mod tests {
         fresh.player.origin = [40., 0., -8.];
         fresh.player.velocity = [250., 0., -60.];
         fresh.player.view_angles[1] = 4000;
+        fresh.player.kick_angles = [3., 0., -1.];
         fresh.player.pm_flags = 16;
         fresh.player.stats[1] = 80;
         fresh.entities.get_mut(&2).unwrap().origin = [140., 0., 0.];
@@ -411,6 +530,7 @@ mod tests {
         assert_eq!(got.player.origin, [40., 0., -8.]);
         assert_eq!(got.player.velocity, [250., 0., -60.]);
         assert_eq!(got.player.view_angles[1], 4000);
+        assert_eq!(got.player.kick_angles, [-2., 0., 1.]);
         assert_eq!(got.player.pm_flags, 16);
         assert_eq!(got.health(), 100);
         assert_eq!(got.entities[&2].origin, [110., 0., 0.]);
@@ -424,6 +544,7 @@ mod tests {
         let mut c = Capabilities::new(Some(PlayerCapabilities::human_limitations_v3()));
         let start = Instant::now();
         let mut old = snapshot(10);
+        old.player.kick_angles = [-2., 0., 1.];
         old.events.push(EventRecord {
             id: 1,
             map_epoch: 0,
@@ -436,12 +557,15 @@ mod tests {
         let early = c.observation(snapshot(11), start + Duration::from_millis(99));
         assert!(!early.ready);
         assert!(early.events.is_empty());
+        assert_eq!(early.player.kick_angles, [0.; 3]);
         let mut fresh = snapshot(12);
         fresh.player.origin = [32., 0., 0.];
+        fresh.player.kick_angles = [3., 0., -1.];
         let got = c.observation(fresh, start + Duration::from_millis(100));
         assert!(got.ready);
         assert_eq!(got.frame, 10);
         assert_eq!(got.player.origin, [32., 0., 0.]);
+        assert_eq!(got.player.kick_angles, [-2., 0., 1.]);
         assert_eq!(got.snapshot_age, Some(Duration::from_millis(110)));
         assert_eq!(got.events.len(), 1);
         assert_eq!(got.events[0].id, 1);

@@ -15,6 +15,8 @@ pub enum PlayerCapabilities {
     HumanLimitationsV2,
     /// V2 with a 100 ms world-perception delay and stereo sound cues.
     HumanLimitationsV3,
+    /// Unfiltered observations and independent 360 deg/s pitch and yaw limits.
+    HumanLimitationsV4,
 }
 impl PlayerCapabilities {
     pub const fn human_limitations_v1() -> Self {
@@ -27,6 +29,10 @@ impl PlayerCapabilities {
 
     pub const fn human_limitations_v3() -> Self {
         Self::HumanLimitationsV3
+    }
+
+    pub const fn human_limitations_v4() -> Self {
+        Self::HumanLimitationsV4
     }
 }
 
@@ -302,7 +308,7 @@ pub struct Observation {
     pub map: String,
     pub slot: Option<usize>,
     /// Local player state. HumanLimitationsV2 and V3 refresh movement and view
-    /// fields from the latest snapshot while HUD and weapon fields stay delayed.
+    /// fields from the latest snapshot while camera kick, HUD, and weapon fields stay delayed.
     pub player: PlayerState,
     /// Network snapshot entities; the optional capability profile applies FOV filtering.
     /// Neither mode provides map-geometry occlusion. See docs.

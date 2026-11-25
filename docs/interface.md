@@ -27,6 +27,8 @@ Actions do not automatically jump obstacles, aim, shoot, select targets, choose 
 
 ## State
 
+`PlayerState.kick_angles` contains the server-provided pitch, yaw, and roll offsets in degrees for the rendered camera. The library exposes these offsets separately from aim. With human limitations enabled, camera kick follows the delayed snapshot, including in V2 and V3 where movement and view fields refresh from the latest snapshot.
+
 Positions and velocities are decoded into Quake world units and units/second. `PlayerState.view_angles` remain raw unsigned 16-bit angle units (65536 per turn); `delta_angles` are raw signed offsets. `Action.view` accepts degrees. `EntityState.angles` are degrees at the protocol's 8-bit precision. State structs expose the fields needed for control; they are not a complete rendering demo format.
 
 Player slots are zero based; player entity IDs are `slot + 1`. `players` includes configured slots, some empty. `PlayerInfo.team` and `Observation::team()` recognize classic CTF `ctf_r` / `ctf_b` skins only. For base-game team deathmatch, use `PlayerInfo::deathmatch_team(DeathmatchTeamRule::Skin)` or `::Model` and compare exact keys. Set `Config.skin` to join that team and leave `Config.team=None`. `DeathmatchTeamRule::from_dmflags()` gives model teams (128) precedence over skin teams (64), matching the base game. Supply the actual server rule; it is not inferred from snapshots. An empty raw `game_dir` denotes the default base game. Entity model indices resolve through `models`; sound indices through `sounds`. Model 255 is the player-model convention, not an ordinary model path. Item inventory indices resolve through `item_names`.
@@ -41,11 +43,13 @@ Events include messages, center prints, layouts, sound, muzzle flashes and tempo
 
 ## Optional capability profile
 
-`Config.capabilities` defaults to `None`, retaining the existing transport behavior. Set it to `Some(PlayerCapabilities::human_limitations_v1())` to use the fixed limits documented in the README. The private worker applies turn limits once per 50 ms tick and delays/FOV-filters observations before publishing shared state. No public raw-observation accessor is available on that client. Extra submissions replace pending input; extra reads clone the same processed publication.
+Bots can call `Client::submit_with_aim_tolerance` to attach an optional firing condition to an action. On each input tick, the worker checks the post-limit pitch and yaw against the requested view and omits attack from that command if the angular error exceeds the caller's tolerance in degrees. Actions without a requested view retain their normal button behavior.
 
-Profile publications have a current local sequence/context but delayed gameplay data. Continue submitting against the received publication; the existing action timeout measures publication/submission freshness, not the artificial perception delay. `snapshot_age` and inventory age include the delay. Readiness becomes false immediately when the underlying snapshot is stale, and old queued data is discarded. The queue is bounded to eight snapshots (normally four await release).
+`Config.capabilities` defaults to `None`, retaining the existing transport behavior. The private worker applies turn limits once per 50 ms tick. V1–V3 delay and filter observations before publishing shared state. V4 publishes observations with ordinary transport timing and content and limits pitch and yaw independently to 18° per tick. Extra submissions replace pending input and extra reads clone the same publication.
 
-The limited view in `player.view_angles` is the camera used for that delayed observation. Forward/side input paired with a desired view is transformed into the limited camera frame, with the existing ±400 component clamps. Roll requests are ignored. Angular state resets on a context change, server delta-angle correction or respawn. None of these profile behaviors apply when disabled.
+V1–V3 publications have a current local sequence/context and delayed gameplay data. Continue submitting against the received publication; the existing action timeout measures publication/submission freshness, not the artificial perception delay. `snapshot_age` and inventory age include the delay. Readiness becomes false immediately when the underlying snapshot is stale, and old queued data is discarded. The queue is bounded to eight snapshots (normally four await release).
+
+V1–V3 publish the limited camera in `player.view_angles`, rotate forward/side input into the limited camera frame subject to the existing ±400 component clamps, and ignore roll requests. V4 only adjusts commanded pitch and yaw. Angular state resets on a context change, server delta-angle correction or respawn.
 
 ## Competition boundary
 

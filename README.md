@@ -8,7 +8,7 @@ A standalone Rust library that connects to classic Quake II as an ordinary playe
 - Independent background networking at 20 input updates per second.
 - Player/entity state, player names and teams, inventory, model/sound/item names and classic CTF HUD values.
 - Movement, aiming, attack/respawn input, weapon selection, CTF team joining and classic skin/model team identification.
-- Optional `human_limitations_v1` capability profile; disabled by default.
+- Optional versioned human capability profiles, disabled by default.
 - Bounded event history, expiring input, stale-observation rejection, map changes and server-requested reconnects.
 
 Navigation, map geometry, line-of-sight calculations, target selection, combat policy, learning and team coordination belong in your bot. There is no built-in AI, renderer, JSON service or deployment integration.
@@ -76,7 +76,13 @@ was first observed. As with ordinary stereo panning, a centered sound may be
 in front of or behind the listener. Sounds outside the visual field of view
 can still provide a stereo cue.
 
-Available starting in **v0.2.0**. Use the release tag:
+`HumanLimitationsV4` caps pitch and yaw independently at 360°/s, or 18°
+per axis per 50 ms input tick. It publishes the same decoded observations as
+unrestricted mode, including full sound metadata and camera kick. It adds no
+acceleration ramp. Roll and non-view inputs use the ordinary transport rules.
+Select it with `PlayerCapabilities::human_limitations_v4()`.
+
+V1 was introduced in **v0.2.0**. To pin that release:
 
 ```toml
 [dependencies]
@@ -103,11 +109,11 @@ Leave `capabilities = None` (the default) for the existing unrestricted behavior
 | Input / publication rate | Existing 20 Hz worker; extra calls cannot advance the limiter |
 | Random aim error | None; prediction and accurate tracking remain useful |
 
-Both `observation()` and `wait_for_update()` expose only processed publications. During delay warmup or stale snapshots, `ready` is false and gameplay data is empty. Lifecycle invalidation is immediate: map/reconnection changes clear the delay queue, preventing old-map data from resurfacing. Snapshot and inventory ages include the intentional delay. Camera state resets for server delta-angle changes and respawn; these server-driven changes are not voluntary turns.
+For V1–V3, both `observation()` and `wait_for_update()` expose the delayed and filtered publication. During delay warmup or stale snapshots, `ready` is false and gameplay data is empty. Lifecycle invalidation is immediate: map/reconnection changes clear the delay queue, preventing old-map data from resurfacing. Snapshot and inventory ages include the intentional delay. All four profiles reset turn state for server delta-angle changes and respawn.
 
-With the profile enabled, `Action.view` is a desired orientation. Movement supplied with that orientation is rotated into the limited camera's axes to preserve the intended world travel direction, subject to normal input clamps. Attack is still the bot's decision and fires along the actual limited view, not the requested target. `view=None` brakes angular motion. Expired input immediately releases movement and attack while angular motion brakes. There is no extra action delay on top of the observation delay.
+With any profile enabled, `Action.view` is a desired orientation. V1–V3 rotate movement into the limited camera's axes to preserve the intended world travel direction, subject to normal input clamps, and brake on `view=None`. V4 uses the submitted movement axes and holds its current limited pitch and yaw on `view=None`. Attack remains the bot's decision and uses the transmitted aim. Expired input releases movement and attack.
 
-Sound events retain sound identity and volume but remove exact source position, entity and channel. V3 also supplies the stereo cue described above. Out-of-view muzzle flashes and opaque temporary-effect payloads are removed. Public roster/config strings, text and scoreboard layouts are retained but delayed.
+V1–V3 retain sound identity and volume but remove exact source position, entity and channel. V3 also supplies the stereo cue described above. Out-of-view muzzle flashes and opaque temporary-effect payloads are removed. Public roster/config strings, text and scoreboard layouts are retained but delayed.
 
 **FOV is not wall occlusion.** The crate still has no map geometry: in-frustum network entities can be behind walls. Bots must supply geometry checks separately, and this profile does not model partial visibility, directional hearing or a human's complete perception. This is an opt-in convention, not enforcement against modified clients. New balancing parameters should use a new profile version rather than silently changing v1.
 
