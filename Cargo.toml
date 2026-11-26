@@ -1,6 +1,6 @@
 [package]
 name = "on-sunday-i-will-kill-again"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "GPL-2.0-or-later"
 description = "A headless Quake II protocol 34 player connection for independent Rust bots"

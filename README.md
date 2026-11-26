@@ -28,7 +28,7 @@ For another Rust project, use this Git dependency (the crate is not published to
 
 ```toml
 [dependencies]
-on-sunday-i-will-kill-again = { git = "https://github.com/bigdave/on-sunday-i-will-kill-again", tag = "v0.2.0" }
+on-sunday-i-will-kill-again = { git = "https://github.com/bigdave/on-sunday-i-will-kill-again", tag = "v0.4.0" }
 ```
 
 For a local checkout, use a path dependency instead (adjust the path):
